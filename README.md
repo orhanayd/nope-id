@@ -835,8 +835,6 @@ npm run test:randomness
 | Alphabet Coverage | ✅ 64/64 (100%) | ✅ 64/64 (100%) |
 | Modulo Bias (3-char) | ✅ 0.47% deviation | ✅ 0.94% deviation |
 
-**Result: nope-id randomness quality is equal or better than nanoid!**
-
 ---
 
 ## Performance
