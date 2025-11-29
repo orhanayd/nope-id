@@ -1,88 +1,94 @@
 {
-  "name": "nope-id",
-  "version": "1.0.0",
-  "description": "A tiny, secure, URL-friendly unique string ID generator - nanoid alternative with extra features",
-  "type": "module",
-  "main": "index.cjs",
-  "module": "index.js",
-  "types": "index.d.ts",
-  "exports": {
-    ".": {
-      "import": {
-        "types": "./index.d.ts",
-        "default": "./index.js"
-      },
-      "require": {
-        "types": "./index.d.ts",
-        "default": "./index.cjs"
-      },
-      "browser": "./index.browser.js"
-    },
-    "./non-secure": {
-      "import": {
-        "types": "./index.d.ts",
-        "default": "./non-secure/index.js"
-      },
-      "require": {
-        "types": "./index.d.ts",
-        "default": "./non-secure/index.cjs"
-      },
-      "browser": "./non-secure/index.js"
-    },
-    "./package.json": "./package.json"
-  },
-  "browser": {
-    "./index.js": "./index.browser.js",
-    "./index.cjs": "./index.browser.js"
-  },
-  "react-native": {
-    "./index.js": "./index.browser.js",
-    "./index.cjs": "./index.browser.js"
-  },
-  "sideEffects": false,
-  "engines": {
-    "node": ">=16.0.0"
-  },
-  "scripts": {
-    "test": "node tests/index.js",
-    "test:core": "node --test tests/core.test.js",
-    "test:features": "node --test tests/features.test.js",
-    "test:utils": "node --test tests/utils.test.js",
-    "test:non-secure": "node --test tests/non-secure.test.js",
-    "benchmark": "node benchmarks/benchmark.js"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/orhanayd/nope-id.git"
-  },
-  "keywords": [
-    "uuid",
-    "id",
-    "random",
-    "unique",
-    "generator",
-    "nanoid",
-    "secure",
-    "url-safe",
-    "crypto",
-    "identifier",
-    "sortable",
-    "prefixed"
-  ],
-  "author": "orhanayd",
-  "license": "MIT",
-  "bugs": {
-    "url": "https://github.com/orhanayd/nope-id/issues"
-  },
-  "homepage": "https://github.com/orhanayd/nope-id#readme",
-  "files": [
-    "index.js",
-    "index.cjs",
-    "index.browser.js",
-    "index.d.ts",
-    "non-secure"
-  ],
-  "devDependencies": {
-    "nanoid": "^5.1.6"
-  }
+	"name": "nope-id",
+	"version": "1.0.0",
+	"description": "A tiny, secure, URL-friendly unique string ID generator - nanoid alternative with extra features",
+	"type": "module",
+	"main": "index.cjs",
+	"module": "index.js",
+	"types": "index.d.ts",
+	"exports": {
+		".": {
+			"import": {
+				"types": "./index.d.ts",
+				"default": "./index.js"
+			},
+			"require": {
+				"types": "./index.d.ts",
+				"default": "./index.cjs"
+			},
+			"browser": "./index.browser.js"
+		},
+		"./non-secure": {
+			"import": {
+				"types": "./index.d.ts",
+				"default": "./non-secure/index.js"
+			},
+			"require": {
+				"types": "./index.d.ts",
+				"default": "./non-secure/index.cjs"
+			},
+			"browser": "./non-secure/index.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"browser": {
+		"./index.js": "./index.browser.js",
+		"./index.cjs": "./index.browser.js"
+	},
+	"react-native": {
+		"./index.js": "./index.browser.js",
+		"./index.cjs": "./index.browser.js"
+	},
+	"sideEffects": false,
+	"engines": {
+		"node": ">=16.0.0"
+	},
+	"scripts": {
+		"test": "node tests/index.js",
+		"test:core": "node --test tests/core.test.js",
+		"test:features": "node --test tests/features.test.js",
+		"test:utils": "node --test tests/utils.test.js",
+		"test:non-secure": "node --test tests/non-secure.test.js",
+		"benchmark": "node benchmarks/benchmark.js"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/orhanayd/nope-id.git"
+	},
+	"keywords": [
+		"uuid",
+		"id",
+		"random",
+		"unique",
+		"generator",
+		"nanoid",
+		"secure",
+		"url-safe",
+		"crypto",
+		"identifier",
+		"sortable",
+		"prefixed"
+	],
+	"author": "orhanayd",
+	"license": "MIT",
+	"bugs": {
+		"url": "https://github.com/orhanayd/nope-id/issues"
+	},
+	"homepage": "https://github.com/orhanayd/nope-id#readme",
+	"files": [
+		"index.js",
+		"index.cjs",
+		"index.browser.js",
+		"index.d.ts",
+		"non-secure"
+	],
+	"devDependencies": {
+		"nanoid": "^5.1.6"
+	},
+	"maintainers": [
+		{
+			"name": "Orhan AYDOGDU",
+			"email": "orhan.aydogdu@kentkart.com.tr"
+		}
+	]
 }
