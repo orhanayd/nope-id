@@ -733,41 +733,12 @@ nope-id is designed with security as a top priority. We've implemented multiple 
 
 | Security Feature | Description |
 |-----------------|-------------|
-| **Timing Attack Prevention** | `isValid()` uses constant-time comparison to prevent timing side-channel attacks |
-| **Modulo Bias Elimination** | Uses rejection sampling in `customRandom()` to ensure uniform distribution for all alphabet sizes |
-| **Prototype Pollution Protection** | `alphabets` object uses `Object.freeze(Object.create(null))` - immune to prototype pollution |
-| **Integer Overflow Protection** | `collisionProbability()` uses BigInt for accurate calculations with large numbers |
+| **Timing Attack Prevention** | `isValid()` uses constant-time comparison to prevent timing side-channel attacks that could leak information about valid characters |
+| **Modulo Bias Elimination** | Uses rejection sampling to ensure perfectly uniform distribution for all alphabet sizes (not just powers of 2) |
+| **Prototype Pollution Protection** | `alphabets` object is frozen with null prototype - immune to prototype pollution attacks |
+| **Integer Overflow Protection** | `collisionProbability()` uses BigInt for accurate calculations with astronomically large numbers |
 | **DoS Prevention** | `sortableId()` has iteration limits to prevent infinite loops from frozen system clocks |
 | **Buffer Safety** | Pool management handles `>65536` byte requests safely with chunked filling |
-
-### Timing Attack Prevention (isValid)
-
-```javascript
-// Vulnerable (early exit leaks information):
-for (let i = 0; i < id.length; i++) {
-  if (!charSet.has(id[i])) return false  // ❌ Timing leak
-}
-
-// nope-id (constant-time):
-let valid = 1
-for (let i = 0; i < id.length; i++) {
-  valid &= charSet.has(id[i]) ? 1 : 0  // ✅ Always checks all chars
-}
-return valid === 1
-```
-
-### Modulo Bias Prevention
-
-```javascript
-// Vulnerable (biased for non-power-of-2 alphabets):
-id += alphabet[byte % alphabet.length]  // ❌ Some chars more likely
-
-// nope-id (rejection sampling):
-const idx = byte & mask
-if (idx < alphabet.length) {  // ✅ Skip biased values
-  id += alphabet[idx]
-}
-```
 
 ### Best Practices
 
@@ -893,6 +864,16 @@ These features are exclusive to nope-id (nanoid doesn't have them):
 - **Bitwise Operations**: Uses `& mask` for fast alphabet index mapping
 - **Pre-cached Generators**: Common functions like `slugId()` and `shortId()` use cached generators
 - **Zero Dependencies**: No external library overhead
+
+---
+
+## Disclaimer
+
+While nope-id uses cryptographically secure random number generators (`crypto.getRandomValues`) and implements security best practices, **no software can guarantee 100% randomness or absolute security**. The quality of randomness ultimately depends on the underlying operating system's entropy source.
+
+For extremely high-security applications (e.g., cryptographic keys, long-term secrets), consider using dedicated cryptographic libraries that have undergone formal security audits.
+
+nope-id is provided "as is" without warranty of any kind. Always evaluate whether it meets your specific security requirements.
 
 ---
 
