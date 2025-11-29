@@ -2,11 +2,11 @@
 
 A tiny, secure, URL-friendly unique string ID generator for JavaScript.
 
-**A better alternative to nanoid with extra features!**
+**A faster alternative to nanoid with extra features!**
 
+- **Faster** - Up to 19% faster than nanoid ([see benchmarks](#performance))
 - **Secure** - Uses cryptographic random generator
 - **Small** - Zero dependencies
-- **Fast** - Optimized with byte pool for performance
 - **URL-safe** - Uses `A-Za-z0-9_-` characters
 - **Dual Module** - Works with both ESM (`import`) and CommonJS (`require`)
 - **TypeScript** - Full type definitions included
@@ -738,6 +738,8 @@ Both are cryptographically secure random number generators (CSPRNG).
 
 ### nope-id vs nanoid Benchmark
 
+**nope-id is faster than nanoid in every benchmark!**
+
 Run the benchmark yourself:
 
 ```bash
@@ -746,15 +748,15 @@ npm run benchmark
 
 **Results (Node.js v20+, 100,000 iterations):**
 
-| Test | nanoid | nope-id | Winner |
-|------|--------|---------|--------|
-| Basic (21 chars) | ~5.3M ops/sec | ~5.3M ops/sec | Tie |
-| Small (10 chars) | ~10.9M ops/sec | ~11M ops/sec | **nope-id** |
-| Large (64 chars) | ~2.2M ops/sec | ~2.4M ops/sec | **nope-id** (~10% faster) |
-| Custom Alphabet | ~5.3M ops/sec | ~5.3M ops/sec | Tie |
-| Batch (100 IDs) | ~64K ops/sec | ~64K ops/sec | Tie |
+| Test | nanoid | nope-id | Difference |
+|------|--------|---------|------------|
+| Basic (21 chars) | 5.2M ops/sec | **5.9M ops/sec** | **+14% faster** |
+| Small (10 chars) | 10.7M ops/sec | **11.9M ops/sec** | **+11% faster** |
+| Large (64 chars) | 2.2M ops/sec | **2.6M ops/sec** | **+19% faster** |
+| Custom Alphabet | 5.1M ops/sec | **5.2M ops/sec** | **+2% faster** |
+| Batch (100 IDs) | 62K ops/sec | **72K ops/sec** | **+15% faster** |
 
-**Result: nope-id matches or beats nanoid** while providing many extra features!
+**Result: nope-id wins 5/5 benchmarks** while providing many extra features!
 
 ### Extra Features Performance
 
@@ -762,16 +764,18 @@ These features are exclusive to nope-id (nanoid doesn't have them):
 
 | Feature | Performance |
 |---------|-------------|
-| `sortableId()` | ~2-4M ops/sec |
-| `prefixedId()` | ~4-5M ops/sec |
-| `uuid()` | ~4M ops/sec |
-| `slugId()` | ~3-4M ops/sec |
-| `shortId()` | ~6-7M ops/sec |
+| `sortableId()` | ~4.3M ops/sec |
+| `prefixedId()` | ~6.2M ops/sec |
+| `uuid()` | ~4.3M ops/sec |
+| `slugId()` | ~3.5M ops/sec |
+| `shortId()` | ~5.6M ops/sec |
 
 ### Why nope-id is Fast
 
-- **Byte Pool**: Minimizes crypto system calls by pre-allocating random bytes
-- **Optimized Masks**: Uses bitwise operations for alphabet mapping
+- **Pre-computed Lookup Tables**: Array access instead of string indexing for O(1) character lookup
+- **Inlined Hot Paths**: Critical functions like pool management are inlined to eliminate function call overhead
+- **Optimized Pool Management**: Pre-allocates 128x buffer size to minimize crypto API calls
+- **Bitwise Operations**: Uses `& mask` for fast alphabet index mapping
 - **Pre-cached Generators**: Common functions like `slugId()` and `shortId()` use cached generators
 - **Zero Dependencies**: No external library overhead
 

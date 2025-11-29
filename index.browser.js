@@ -5,6 +5,9 @@
 export const urlAlphabet =
   'useandom-26T198340PX75pxJACKVERYMINDBUSHWOLF_GQZbfghjklqvwyzrict'
 
+// Pre-computed lookup table for O(1) alphabet access
+const urlAlphabetLookup = /* @__PURE__ */ urlAlphabet.split('')
+
 // Pre-built alphabets for different use cases
 export const alphabets = {
   alphanumeric: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz',
@@ -54,16 +57,20 @@ export const customRandom = (alphabet, defaultSize, getRandom) => {
   if (!alphabet || alphabet.length === 0) {
     throw new Error('Alphabet cannot be empty')
   }
-  let mask = (2 << (31 - Math.clz32((alphabet.length - 1) | 1))) - 1
-  let step = Math.ceil((1.6 * mask * defaultSize) / alphabet.length)
+  // Pre-compute constants and lookup table
+  const alphabetLookup = alphabet.split('')
+  const len = alphabet.length
+  const mask = (2 << (31 - Math.clz32((len - 1) | 1))) - 1
+  const step = Math.ceil((1.6 * mask * defaultSize) / len)
+
   return (size = defaultSize) => {
     if (size <= 0) return ''
     let id = ''
     while (true) {
-      let bytes = getRandom(step)
+      const bytes = getRandom(step)
       let i = step
       while (i--) {
-        id += alphabet[bytes[i] & mask] || ''
+        id += alphabetLookup[bytes[i] & mask] || ''
         if (id.length >= size) return id
       }
     }
@@ -81,12 +88,23 @@ export const customAlphabet = (alphabet, defaultSize = 21) => {
   return customRandom(alphabet, defaultSize, random)
 }
 
-// Main nopeid function
+// Main nopeid function - 21 characters by default
 export const nopeid = (size = 21) => {
-  fillPool((size |= 0))
+  // Inline pool management for hot path performance
+  size |= 0
+  if (pool.length < size) {
+    pool = new Uint8Array(size * POOL_SIZE_MULTIPLIER)
+    crypto.getRandomValues(pool)
+    poolOffset = 0
+  } else if (poolOffset + size > pool.length) {
+    crypto.getRandomValues(pool)
+    poolOffset = 0
+  }
+
   let id = ''
-  for (let i = poolOffset - size; i < poolOffset; i++) {
-    id += urlAlphabet[pool[i] & 63]
+  const end = poolOffset + size
+  while (poolOffset < end) {
+    id += urlAlphabetLookup[pool[poolOffset++] & 63]
   }
   return id
 }
