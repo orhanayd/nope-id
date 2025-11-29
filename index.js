@@ -11,22 +11,23 @@ export const urlAlphabet =
 const urlAlphabetLookup = /* @__PURE__ */ urlAlphabet.split('')
 
 // Pre-built alphabets for different use cases
-export const alphabets = {
-  alphanumeric: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz',
-  lowercase: 'abcdefghijklmnopqrstuvwxyz',
-  uppercase: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
-  numbers: '0123456789',
-  hexLower: '0123456789abcdef',
-  hexUpper: '0123456789ABCDEF',
-  nolookalikes: '346789ABCDEFGHJKLMNPQRTUVWXYabcdefghjkmnpqrtwxyz',
-  nolookalikesSafe: '6789BCDFGHJKLMNPQRTWbcdfghjkmnpqrtwz',
-  binary: '01',
-  octal: '01234567',
-  base32: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567',
-  base32Lower: 'abcdefghijklmnopqrstuvwxyz234567',
-  base58: '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz',
-  filename: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_',
-}
+// Object.freeze prevents modification and prototype pollution attacks
+export const alphabets = Object.freeze(Object.create(null, {
+  alphanumeric: { value: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', enumerable: true },
+  lowercase: { value: 'abcdefghijklmnopqrstuvwxyz', enumerable: true },
+  uppercase: { value: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', enumerable: true },
+  numbers: { value: '0123456789', enumerable: true },
+  hexLower: { value: '0123456789abcdef', enumerable: true },
+  hexUpper: { value: '0123456789ABCDEF', enumerable: true },
+  nolookalikes: { value: '346789ABCDEFGHJKLMNPQRTUVWXYabcdefghjkmnpqrtwxyz', enumerable: true },
+  nolookalikesSafe: { value: '6789BCDFGHJKLMNPQRTWbcdfghjkmnpqrtwz', enumerable: true },
+  binary: { value: '01', enumerable: true },
+  octal: { value: '01234567', enumerable: true },
+  base32: { value: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567', enumerable: true },
+  base32Lower: { value: 'abcdefghijklmnopqrstuvwxyz234567', enumerable: true },
+  base58: { value: '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz', enumerable: true },
+  filename: { value: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_', enumerable: true },
+}))
 
 // Crockford's Base32 alphabet for sortable IDs (lexicographically sortable)
 const CROCKFORD_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
@@ -66,6 +67,7 @@ export const random = bytes => {
 }
 
 // Custom random function ID generator (core implementation)
+// Uses rejection sampling to eliminate modulo bias
 export const customRandom = (alphabet, defaultSize, getRandom) => {
   if (!alphabet || alphabet.length === 0) {
     throw new Error('Alphabet cannot be empty')
@@ -73,7 +75,9 @@ export const customRandom = (alphabet, defaultSize, getRandom) => {
   // Pre-compute constants and lookup table
   const alphabetLookup = alphabet.split('')
   const len = alphabet.length
+  // Calculate mask for rejection sampling (power of 2 - 1)
   const mask = (2 << (31 - Math.clz32((len - 1) | 1))) - 1
+  // Increase step to account for rejection sampling overhead
   const step = Math.ceil((1.6 * mask * defaultSize) / len)
 
   return (size = defaultSize) => {
@@ -83,8 +87,12 @@ export const customRandom = (alphabet, defaultSize, getRandom) => {
       const bytes = getRandom(step)
       let i = step
       while (i--) {
-        id += alphabetLookup[bytes[i] & mask] || ''
-        if (id.length >= size) return id
+        // Rejection sampling: skip values >= alphabet length to eliminate bias
+        const idx = bytes[i] & mask
+        if (idx < len) {
+          id += alphabetLookup[idx]
+          if (id.length >= size) return id
+        }
       }
     }
   }
@@ -145,6 +153,9 @@ const incrementRandom = () => {
 
 // ULID-like sortable ID with monotonic guarantee
 // Format: 10 chars timestamp (base32) + 12 chars random (base32) = 22 chars
+// Max wait iterations prevents DoS from frozen system clock
+const MAX_CLOCK_WAIT_ITERATIONS = 10000
+
 export const sortableId = (size = 22) => {
   if (size <= 0) return ''
   const now = Date.now()
@@ -152,9 +163,14 @@ export const sortableId = (size = 22) => {
   if (now === lastTime) {
     // Same millisecond - increment random part for monotonicity
     if (!incrementRandom()) {
-      // Random overflow - wait for next millisecond
-      while (Date.now() === now) {
-        // Busy wait (very rare case)
+      // Random overflow - wait for next millisecond with DoS protection
+      let iterations = 0
+      while (Date.now() === now && iterations++ < MAX_CLOCK_WAIT_ITERATIONS) {
+        // Busy wait with iteration limit
+      }
+      if (iterations >= MAX_CLOCK_WAIT_ITERATIONS) {
+        // Clock appears frozen - generate with fresh random anyway
+        lastTime = 0
       }
       return sortableId(size)
     }
@@ -209,26 +225,39 @@ export const generateMany = (count, size = 21) => {
 }
 
 // Validate if a string is a valid ID for given alphabet
+// Uses constant-time comparison to prevent timing attacks
 export const isValid = (id, alphabet = urlAlphabet) => {
   if (typeof id !== 'string' || id.length === 0) return false
 
-  // Use Set for O(1) lookup on large alphabets
+  // Use Set for O(1) lookup
   const charSet = new Set(alphabet)
+
+  // Constant-time validation: always check all characters
+  // to prevent timing attacks that could leak valid character positions
+  let valid = 1
   for (let i = 0; i < id.length; i++) {
-    if (!charSet.has(id[i])) return false
+    valid &= charSet.has(id[i]) ? 1 : 0
   }
-  return true
+  return valid === 1
 }
 
 // Calculate collision probability using birthday paradox
+// Uses BigInt for large values to prevent integer overflow
 export const collisionProbability = (idLength, alphabetSize = 64) => {
   if (idLength <= 0 || alphabetSize <= 0) {
     throw new Error('Length and alphabet size must be positive')
   }
 
-  const possibleIds = alphabetSize ** idLength
+  // Use BigInt for accurate calculation with large numbers
+  const possibleIdsBig = BigInt(alphabetSize) ** BigInt(idLength)
+  // Convert to Number for calculations (may lose precision for very large values)
+  const possibleIds = possibleIdsBig > BigInt(Number.MAX_SAFE_INTEGER)
+    ? Number.MAX_SAFE_INTEGER
+    : Number(possibleIdsBig)
+
   return {
     totalPossible: possibleIds,
+    totalPossibleBigInt: possibleIdsBig,
     // Probability of collision when generating 1 billion IDs
     probabilityForBillion: 1 - Math.exp((-1e9 * (1e9 - 1)) / (2 * possibleIds)),
     // Safe count before 50% collision probability

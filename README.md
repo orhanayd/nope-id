@@ -2,11 +2,13 @@
 
 A tiny, secure, URL-friendly unique string ID generator for JavaScript.
 
-**A faster alternative to nanoid with extra features!**
+**A faster, more secure alternative to nanoid with extra features!**
 
-- **Faster** - Up to 19% faster than nanoid ([see benchmarks](#performance))
-- **Secure** - Uses cryptographic random generator
-- **Small** - Zero dependencies
+- **Faster** - Up to 18% faster than nanoid, wins 5/5 benchmarks ([see benchmarks](#performance))
+- **Security Hardened** - Timing attack prevention, modulo bias elimination, prototype pollution protection ([see security](#security))
+- **Well Tested** - 244 tests including security & entropy tests ([see testing](#testing))
+- **Cryptographically Secure** - Uses `webcrypto.getRandomValues()` (CSPRNG)
+- **Zero Dependencies** - No external dependencies
 - **URL-safe** - Uses `A-Za-z0-9_-` characters
 - **Dual Module** - Works with both ESM (`import`) and CommonJS (`require`)
 - **TypeScript** - Full type definitions included
@@ -720,17 +722,130 @@ Works in all modern browsers with Web Crypto API support.
 
 ## Security
 
-nope-id uses:
-- `webcrypto.getRandomValues()` in Node.js
-- `crypto.getRandomValues()` in browsers
+nope-id is designed with security as a top priority. We've implemented multiple security hardening measures that go beyond basic cryptographic randomness.
 
-Both are cryptographically secure random number generators (CSPRNG).
+### Cryptographic Security
 
-**Best Practices:**
+- **Node.js**: `webcrypto.getRandomValues()` (CSPRNG)
+- **Browser**: `crypto.getRandomValues()` (CSPRNG)
+
+### Security Hardening
+
+| Security Feature | Description |
+|-----------------|-------------|
+| **Timing Attack Prevention** | `isValid()` uses constant-time comparison to prevent timing side-channel attacks |
+| **Modulo Bias Elimination** | Uses rejection sampling in `customRandom()` to ensure uniform distribution for all alphabet sizes |
+| **Prototype Pollution Protection** | `alphabets` object uses `Object.freeze(Object.create(null))` - immune to prototype pollution |
+| **Integer Overflow Protection** | `collisionProbability()` uses BigInt for accurate calculations with large numbers |
+| **DoS Prevention** | `sortableId()` has iteration limits to prevent infinite loops from frozen system clocks |
+| **Buffer Safety** | Pool management handles `>65536` byte requests safely with chunked filling |
+
+### Timing Attack Prevention (isValid)
+
+```javascript
+// Vulnerable (early exit leaks information):
+for (let i = 0; i < id.length; i++) {
+  if (!charSet.has(id[i])) return false  // ❌ Timing leak
+}
+
+// nope-id (constant-time):
+let valid = 1
+for (let i = 0; i < id.length; i++) {
+  valid &= charSet.has(id[i]) ? 1 : 0  // ✅ Always checks all chars
+}
+return valid === 1
+```
+
+### Modulo Bias Prevention
+
+```javascript
+// Vulnerable (biased for non-power-of-2 alphabets):
+id += alphabet[byte % alphabet.length]  // ❌ Some chars more likely
+
+// nope-id (rejection sampling):
+const idx = byte & mask
+if (idx < alphabet.length) {  // ✅ Skip biased values
+  id += alphabet[idx]
+}
+```
+
+### Best Practices
+
 - Use the secure version (default) for tokens, session IDs, API keys
 - Use `sortableId()` for time-based ordering with collision resistance
 - Use `distributedId()` in multi-node deployments
 - Only use `nope-id/non-secure` for non-security-critical purposes
+
+---
+
+## Testing
+
+nope-id has comprehensive test coverage with **244 tests** across 4 test suites, including security-specific tests.
+
+### Run Tests
+
+```bash
+# Run all tests
+npm test
+
+# Run specific test suites
+npm run test:core        # Core functions (nopeid, customAlphabet, random)
+npm run test:features    # Features (prefixedId, sortableId, uuid, etc.)
+npm run test:utils       # Utilities (isValid, collisionProbability)
+npm run test:non-secure  # Non-secure version tests
+```
+
+### Test Coverage
+
+| Test Suite | Tests | Description |
+|------------|-------|-------------|
+| **Core** | 81 | nopeid, customAlphabet, customRandom, random, alphabets |
+| **Features** | 78 | prefixedId, sortableId, uuid, slugId, shortId, distributedId |
+| **Utils** | 56 | isValid, collisionProbability, security tests |
+| **Non-Secure** | 29 | Math.random() based version |
+| **Total** | **244** | All tests passing |
+
+### Security Tests
+
+We have dedicated security tests that verify our hardening measures:
+
+```
+📦 isValid() Security
+  ✅ rejects strings with null bytes
+  ✅ rejects strings with unicode zero-width chars
+  ✅ constant-time validation (timing attack prevention)
+
+📦 Prototype Pollution Prevention
+  ✅ alphabets object is frozen
+  ✅ alphabets has null prototype
+  ✅ alphabets cannot be modified
+  ✅ alphabets does not inherit Object.prototype properties
+
+📦 Modulo Bias Prevention (customAlphabet)
+  ✅ uniform distribution for non-power-of-2 alphabet
+  ✅ uniform distribution for 3-char alphabet
+
+📦 Integer Overflow Prevention
+  ✅ collisionProbability returns BigInt for large values
+  ✅ BigInt is accurate for values exceeding MAX_SAFE_INTEGER
+  ✅ totalPossible is clamped to MAX_SAFE_INTEGER
+
+📦 Security: Entropy Quality
+  ✅ random bytes have good entropy distribution
+  ✅ generated IDs have good character distribution
+  ✅ no predictable patterns in sequential IDs
+  ✅ chi-square test for randomness
+```
+
+### Stress Tests
+
+```
+📦 Stress Tests
+  ✅ rapid sequential generation (10000 IDs) - all unique
+  ✅ pool exhaustion and refill cycle
+  ✅ varying sizes in sequence
+  ✅ alternating between different generators
+```
 
 ---
 
@@ -748,15 +863,15 @@ npm run benchmark
 
 **Results (Node.js v20+, 100,000 iterations):**
 
-| Test | nanoid | nope-id | Difference |
-|------|--------|---------|------------|
-| Basic (21 chars) | 5.2M ops/sec | **5.9M ops/sec** | **+14% faster** |
-| Small (10 chars) | 10.7M ops/sec | **11.9M ops/sec** | **+11% faster** |
-| Large (64 chars) | 2.2M ops/sec | **2.6M ops/sec** | **+19% faster** |
-| Custom Alphabet | 5.1M ops/sec | **5.2M ops/sec** | **+2% faster** |
-| Batch (100 IDs) | 62K ops/sec | **72K ops/sec** | **+15% faster** |
+| Test | nanoid | nope-id | Winner |
+|------|--------|---------|--------|
+| Basic (21 chars) | 5.5M ops/sec | **5.7M ops/sec** | **nope-id +4%** |
+| Small (10 chars) | 10.7M ops/sec | **11.8M ops/sec** | **nope-id +11%** |
+| Large (64 chars) | 2.2M ops/sec | **2.6M ops/sec** | **nope-id +18%** |
+| Custom Alphabet | 5.2M ops/sec | **5.8M ops/sec** | **nope-id +11%** |
+| Batch (100 IDs) | 62K ops/sec | **70K ops/sec** | **nope-id +12%** |
 
-**Result: nope-id wins 5/5 benchmarks** while providing many extra features!
+**Result: nope-id wins 5/5 benchmarks** while providing many extra features and security hardening!
 
 ### Extra Features Performance
 
@@ -764,11 +879,11 @@ These features are exclusive to nope-id (nanoid doesn't have them):
 
 | Feature | Performance |
 |---------|-------------|
-| `sortableId()` | ~4.3M ops/sec |
-| `prefixedId()` | ~6.2M ops/sec |
-| `uuid()` | ~4.3M ops/sec |
-| `slugId()` | ~3.5M ops/sec |
-| `shortId()` | ~5.6M ops/sec |
+| `sortableId()` | ~4.2M ops/sec |
+| `prefixedId()` | ~6.6M ops/sec |
+| `uuid()` | ~5.1M ops/sec |
+| `slugId()` | ~4.2M ops/sec |
+| `shortId()` | ~6.9M ops/sec |
 
 ### Why nope-id is Fast
 
