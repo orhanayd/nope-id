@@ -1,7 +1,7 @@
 {
 	"name": "nope-id",
 	"version": "1.0.0",
-	"description": "A tiny, secure, URL-friendly unique string ID generator - nanoid alternative with extra features",
+	"description": "A tiny, fast, secure, URL-friendly unique string ID generator. ESM & CommonJS. Nanoid alternative with extra features (prefixed IDs, sortable IDs, UUID, distributed IDs).",
 	"type": "module",
 	"main": "index.cjs",
 	"module": "index.js",
