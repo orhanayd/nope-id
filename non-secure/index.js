@@ -46,9 +46,8 @@ export const customAlphabet = (alphabet, defaultSize = 21) => {
 
 // Main nopeid function (non-secure)
 export const nopeid = (size = 21) => {
-  if (size <= 0) return ''
   let id = ''
-  let i = size
+  let i = size | 0
   while (i--) {
     id += urlAlphabet[(Math.random() * 64) | 0]
   }
@@ -75,6 +74,7 @@ const incrementRandom = () => {
 
 // Sortable ID with monotonic guarantee
 export const sortableId = (size = 22) => {
+  if (size <= 0) return ''
   const now = Date.now()
 
   if (now === lastTime) {

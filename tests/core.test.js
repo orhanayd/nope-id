@@ -45,6 +45,18 @@ describe('nopeid()', () => {
   test('handles edge cases', () => {
     assert.equal(nopeid(1).length, 1)
     assert.equal(nopeid(0).length, 0)
+    assert.equal(nopeid(0), '')
+  })
+
+  test('returns empty string for negative size', () => {
+    assert.equal(nopeid(-1), '')
+    assert.equal(nopeid(-100), '')
+  })
+
+  test('handles very large sizes', () => {
+    const largeId = nopeid(1000)
+    assert.equal(largeId.length, 1000)
+    assert.match(largeId, /^[A-Za-z0-9_-]+$/)
   })
 
   test('uses all characters from urlAlphabet', () => {
@@ -120,6 +132,37 @@ describe('customAlphabet()', () => {
     const hexUpperGen = customAlphabet(alphabets.hexUpper, 32)
     assert.match(hexUpperGen(), /^[0-9A-F]{32}$/)
   })
+
+  test('throws error for empty alphabet', () => {
+    assert.throws(() => customAlphabet(''))
+    assert.throws(() => customAlphabet(null))
+    assert.throws(() => customAlphabet(undefined))
+  })
+
+  test('throws error for alphabet longer than 256 characters', () => {
+    const longAlphabet = 'a'.repeat(257)
+    assert.throws(() => customAlphabet(longAlphabet))
+  })
+
+  test('returns empty string for zero/negative size', () => {
+    const gen = customAlphabet('abc', 10)
+    assert.equal(gen(0), '')
+    assert.equal(gen(-5), '')
+  })
+
+  test('works with single character alphabet', () => {
+    const gen = customAlphabet('x', 5)
+    assert.equal(gen(), 'xxxxx')
+  })
+
+  test('works with 256 character alphabet (max)', () => {
+    let alphabet = ''
+    for (let i = 0; i < 256; i++) {
+      alphabet += String.fromCharCode(i)
+    }
+    const gen = customAlphabet(alphabet, 10)
+    assert.equal(gen().length, 10)
+  })
 })
 
 describe('customRandom()', () => {
@@ -165,6 +208,19 @@ describe('customRandom()', () => {
     assert.equal(id.length, 10)
     assert.match(id, /^\d{10}$/)
   })
+
+  test('throws error for empty alphabet', () => {
+    const mockRandom = size => new Uint8Array(size)
+    assert.throws(() => customRandom('', 10, mockRandom))
+    assert.throws(() => customRandom(null, 10, mockRandom))
+  })
+
+  test('returns empty string for zero/negative size', () => {
+    const mockRandom = size => new Uint8Array(size)
+    const gen = customRandom('abc', 10, mockRandom)
+    assert.equal(gen(0), '')
+    assert.equal(gen(-5), '')
+  })
 })
 
 describe('random()', () => {
@@ -192,6 +248,23 @@ describe('random()', () => {
     assert.equal(random(8).length, 8)
     assert.equal(random(64).length, 64)
     assert.equal(random(256).length, 256)
+  })
+
+  test('returns empty buffer for zero bytes', () => {
+    const bytes = random(0)
+    assert.equal(bytes.length, 0)
+  })
+
+  test('returns empty buffer for negative bytes', () => {
+    const bytes = random(-10)
+    assert.equal(bytes.length, 0)
+  })
+
+  test('bytes are within valid range (0-255)', () => {
+    const bytes = random(1000)
+    for (let i = 0; i < bytes.length; i++) {
+      assert.ok(bytes[i] >= 0 && bytes[i] <= 255)
+    }
   })
 })
 
@@ -270,6 +343,111 @@ describe('alphabets', () => {
       const chars = new Set(alphabet)
       assert.equal(chars.size, alphabet.length, `${name} has duplicate characters`)
     }
+  })
+})
+
+// === ADDITIONAL EDGE CASE TESTS ===
+
+describe('nopeid() edge cases', () => {
+  test('handles float size by truncating', () => {
+    const id = nopeid(10.7)
+    assert.equal(id.length, 10)
+  })
+
+  test('handles string number size', () => {
+    // JavaScript coerces to number via |= 0
+    const id = nopeid('15')
+    assert.ok(id.length > 0)
+  })
+
+  test('pool refills correctly after many generations', () => {
+    // Generate enough IDs to force pool refill multiple times
+    // Pool size is 128 * size, so with size 21, pool is 2688 bytes
+    // After ~128 IDs, pool should refill
+    const ids = new Set()
+    for (let i = 0; i < 500; i++) {
+      ids.add(nopeid(21))
+    }
+    assert.equal(ids.size, 500, 'All IDs should be unique after pool refills')
+  })
+
+  test('generates different IDs in rapid succession', () => {
+    const ids = []
+    for (let i = 0; i < 1000; i++) {
+      ids.push(nopeid())
+    }
+    const unique = new Set(ids)
+    assert.equal(unique.size, 1000, 'Rapid generation should produce unique IDs')
+  })
+})
+
+describe('random() edge cases', () => {
+  test('pool expansion for larger requests', () => {
+    // First request small
+    const small = random(10)
+    assert.equal(small.length, 10)
+
+    // Then request much larger - should trigger pool expansion
+    const large = random(1000)
+    assert.equal(large.length, 1000)
+
+    // Verify bytes are valid
+    for (let i = 0; i < large.length; i++) {
+      assert.ok(large[i] >= 0 && large[i] <= 255)
+    }
+  })
+})
+
+describe('customAlphabet() edge cases', () => {
+  test('works with 2-char alphabet (binary)', () => {
+    const binaryGen = customAlphabet('01', 32)
+    const id = binaryGen()
+    assert.equal(id.length, 32)
+    assert.match(id, /^[01]+$/)
+  })
+
+  test('handles alphabet with special regex chars', () => {
+    const gen = customAlphabet('[]{}()*+?.\\^$|', 10)
+    const id = gen()
+    assert.equal(id.length, 10)
+  })
+
+  test('uniform distribution across alphabet', () => {
+    const alphabet = 'ABCD'
+    const gen = customAlphabet(alphabet, 1)
+    const counts = { A: 0, B: 0, C: 0, D: 0 }
+
+    for (let i = 0; i < 10000; i++) {
+      counts[gen()]++
+    }
+
+    // Each should be roughly 25% (2500), allow 15% variance
+    for (const char of alphabet) {
+      assert.ok(counts[char] > 1500, `${char} count too low: ${counts[char]}`)
+      assert.ok(counts[char] < 3500, `${char} count too high: ${counts[char]}`)
+    }
+  })
+})
+
+describe('customRandom() edge cases', () => {
+  test('works with custom deterministic random', () => {
+    let counter = 0
+    const deterministicRandom = size => {
+      const bytes = new Uint8Array(size)
+      for (let i = 0; i < size; i++) {
+        bytes[i] = counter++ % 256
+      }
+      return bytes
+    }
+
+    const gen = customRandom('ABCD', 10, deterministicRandom)
+    const id1 = gen()
+    const id2 = gen()
+
+    assert.equal(id1.length, 10)
+    assert.equal(id2.length, 10)
+    // With deterministic random, IDs should be predictable (but different due to counter)
+    assert.notEqual(id1, id2)
   })
 })
 

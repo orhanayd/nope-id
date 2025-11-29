@@ -48,7 +48,8 @@
     "test:core": "node --test tests/core.test.js",
     "test:features": "node --test tests/features.test.js",
     "test:utils": "node --test tests/utils.test.js",
-    "test:non-secure": "node --test tests/non-secure.test.js"
+    "test:non-secure": "node --test tests/non-secure.test.js",
+    "benchmark": "node benchmarks/benchmark.js"
   },
   "repository": {
     "type": "git",
@@ -80,5 +81,8 @@
     "index.browser.js",
     "index.d.ts",
     "non-secure"
-  ]
+  ],
+  "devDependencies": {
+    "nanoid": "^5.1.6"
+  }
 }

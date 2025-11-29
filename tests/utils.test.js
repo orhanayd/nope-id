@@ -137,6 +137,29 @@ describe('collisionProbability()', () => {
       assert.ok(result.totalPossible > 0)
     })
   })
+
+  test('throws error for zero length', () => {
+    assert.throws(() => collisionProbability(0))
+  })
+
+  test('throws error for negative length', () => {
+    assert.throws(() => collisionProbability(-5))
+  })
+
+  test('throws error for zero alphabet size', () => {
+    assert.throws(() => collisionProbability(21, 0))
+  })
+
+  test('throws error for negative alphabet size', () => {
+    assert.throws(() => collisionProbability(21, -10))
+  })
+
+  test('returns yearsFor1Percent property', () => {
+    const result = collisionProbability(21)
+    assert.ok('yearsFor1Percent' in result)
+    assert.type(result.yearsFor1Percent, 'number')
+    assert.ok(result.yearsFor1Percent > 0)
+  })
 })
 
 describe('uuid()', () => {

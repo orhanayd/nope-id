@@ -10,6 +10,8 @@ import {
   decodeTime,
   getFingerprint,
   distributedId,
+  isValid,
+  uuid,
 } from '../index.js'
 
 describe('prefixedId()', () => {
@@ -58,6 +60,21 @@ describe('prefixedId()', () => {
   test('throws error for non-string prefix', () => {
     assert.throws(() => prefixedId(123))
     assert.throws(() => prefixedId(null))
+    assert.throws(() => prefixedId(undefined))
+    assert.throws(() => prefixedId({}))
+    assert.throws(() => prefixedId([]))
+  })
+
+  test('works with empty prefix', () => {
+    const id = prefixedId('')
+    assert.ok(id.startsWith('_'))
+  })
+
+  test('works with various separators', () => {
+    assert.ok(prefixedId('test', 10, '-').includes('-'))
+    assert.ok(prefixedId('test', 10, ':').includes(':'))
+    assert.ok(prefixedId('test', 10, '.').includes('.'))
+    assert.ok(prefixedId('test', 10, '').length === 4 + 10) // no separator
   })
 })
 
@@ -124,6 +141,35 @@ describe('sortableId()', () => {
     assert.ok(decoded.getTime() >= before)
     assert.ok(decoded.getTime() <= after)
   })
+
+  test('size less than 22 truncates ID', () => {
+    const id = sortableId(10)
+    assert.equal(id.length, 10)
+    // Should still be valid Crockford Base32
+    assert.match(id, /^[0-9A-HJKMNP-TV-Z]+$/i)
+  })
+
+  test('size greater than 22 extends with random', () => {
+    const id = sortableId(30)
+    assert.equal(id.length, 30)
+    // First 22 chars are Crockford, rest are urlAlphabet
+  })
+
+  test('handles size of 0', () => {
+    // Size 0 should return empty or minimal
+    const id = sortableId(0)
+    assert.equal(id, '')
+  })
+
+  test('handles negative size', () => {
+    const id = sortableId(-5)
+    assert.equal(id, '')
+  })
+
+  test('very small size works', () => {
+    const id = sortableId(1)
+    assert.equal(id.length, 1)
+  })
 })
 
 describe('decodeTime()', () => {
@@ -144,6 +190,20 @@ describe('decodeTime()', () => {
 
   test('throws error for invalid characters', () => {
     assert.throws(() => decodeTime('IIIIIIIIOO')) // I and O are invalid in Crockford
+  })
+
+  test('handles lowercase input (case insensitive)', () => {
+    const id = sortableId()
+    const lowerId = id.toLowerCase()
+    const decoded1 = decodeTime(id)
+    const decoded2 = decodeTime(lowerId)
+    assert.equal(decoded1.getTime(), decoded2.getTime())
+  })
+
+  test('throws for non-string input', () => {
+    assert.throws(() => decodeTime(12345))
+    assert.throws(() => decodeTime({}))
+    assert.throws(() => decodeTime([]))
   })
 })
 
@@ -359,6 +419,153 @@ describe('distributedId()', () => {
       ids.add(distributedId())
     }
     assert.equal(ids.size, 100)
+  })
+
+  test('handles size equal to fingerprint + separator', () => {
+    // fingerprint is 4 chars + 1 separator = 5
+    const id = distributedId(5)
+    assert.equal(id.length, 5)
+    assert.ok(id.endsWith('_'))
+  })
+
+  test('handles size smaller than fingerprint + separator', () => {
+    const id = distributedId(3)
+    assert.equal(id.length, 3)
+  })
+
+  test('handles zero size', () => {
+    assert.equal(distributedId(0), '')
+  })
+
+  test('handles negative size', () => {
+    assert.equal(distributedId(-5), '')
+  })
+
+  test('fingerprint is consistent across calls', () => {
+    const id1 = distributedId()
+    const id2 = distributedId()
+    const fp1 = id1.split('_')[0]
+    const fp2 = id2.split('_')[0]
+    assert.equal(fp1, fp2)
+  })
+})
+
+// === ADDITIONAL EDGE CASE TESTS ===
+
+describe('sortableId() edge cases', () => {
+  test('monotonic increment overflow handling', () => {
+    // Generate many IDs in same millisecond to test increment
+    const ids = []
+    const start = Date.now()
+    while (Date.now() === start && ids.length < 100) {
+      ids.push(sortableId())
+    }
+
+    // All should be unique
+    const unique = new Set(ids)
+    assert.equal(unique.size, ids.length, 'Same-ms IDs should be unique')
+
+    // Should be sorted
+    const sorted = [...ids].sort()
+    for (let i = 0; i < ids.length; i++) {
+      assert.equal(ids[i], sorted[i], 'IDs should be in sorted order')
+    }
+  })
+
+  test('timestamp encoding is correct', () => {
+    const id = sortableId()
+    const decoded = decodeTime(id)
+    const now = Date.now()
+
+    // Decoded time should be within 1 second of now
+    assert.ok(Math.abs(decoded.getTime() - now) < 1000, 'Decoded time should be recent')
+  })
+
+  test('float size is truncated', () => {
+    const id = sortableId(15.9)
+    assert.equal(id.length, 15)
+  })
+})
+
+describe('uuid() edge cases', () => {
+  test('version bits are always 4', () => {
+    for (let i = 0; i < 100; i++) {
+      const id = uuid()
+      // Version is char 14 (0-indexed)
+      assert.equal(id[14], '4', 'UUID version should be 4')
+    }
+  })
+
+  test('variant bits are correct (8, 9, a, b)', () => {
+    const validVariants = ['8', '9', 'a', 'b']
+    for (let i = 0; i < 100; i++) {
+      const id = uuid()
+      // Variant is char 19 (0-indexed)
+      assert.ok(validVariants.includes(id[19]), `UUID variant ${id[19]} should be 8, 9, a, or b`)
+    }
+  })
+
+  test('UUID is lowercase', () => {
+    for (let i = 0; i < 10; i++) {
+      const id = uuid()
+      assert.equal(id, id.toLowerCase(), 'UUID should be lowercase')
+    }
+  })
+})
+
+describe('generateMany() edge cases', () => {
+  test('handles float count by truncating', () => {
+    const ids = generateMany(5.9)
+    assert.equal(ids.length, 5)
+  })
+
+  test('large batch generation', () => {
+    const ids = generateMany(10000)
+    assert.equal(ids.length, 10000)
+
+    const unique = new Set(ids)
+    assert.equal(unique.size, 10000, 'All 10000 IDs should be unique')
+  })
+})
+
+describe('prefixedId() edge cases', () => {
+  test('handles unicode prefix', () => {
+    const id = prefixedId('用户', 10)
+    assert.ok(id.startsWith('用户_'))
+    assert.equal(id.length, 2 + 1 + 10) // 用户 (2 chars) + _ + 10
+  })
+
+  test('handles empty separator', () => {
+    const id = prefixedId('user', 10, '')
+    assert.equal(id.length, 4 + 10)
+    assert.ok(id.startsWith('user'))
+  })
+})
+
+describe('isValid() edge cases', () => {
+  test('rejects ID with spaces', () => {
+    assert.equal(isValid('abc def'), false)
+  })
+
+  test('rejects ID with newlines', () => {
+    assert.equal(isValid('abc\ndef'), false)
+  })
+
+  test('validates with custom alphabet containing spaces', () => {
+    assert.equal(isValid('a b c', 'abc '), true)
+  })
+})
+
+describe('Concurrent generation', () => {
+  test('parallel async generation produces unique IDs', async () => {
+    const promises = []
+    for (let i = 0; i < 1000; i++) {
+      promises.push(nopeidAsync())
+    }
+
+    const ids = await Promise.all(promises)
+    const unique = new Set(ids)
+    assert.equal(unique.size, 1000, 'Parallel async should produce unique IDs')
   })
 })
 

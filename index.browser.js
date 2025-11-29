@@ -45,19 +45,29 @@ const fillPool = bytes => {
 
 // Get random bytes from pool
 export const random = bytes => {
-  if (bytes <= 0) return new Uint8Array(0)
   fillPool((bytes |= 0))
   return pool.subarray(poolOffset - bytes, poolOffset)
 }
 
-// Calculate optimal mask for alphabet
-const getMask = alphabetLength => {
-  return (2 << (31 - Math.clz32((alphabetLength - 1) | 1))) - 1
-}
-
-// Calculate optimal step for given size and alphabet
-const getStep = (mask, size, alphabetLength) => {
-  return Math.ceil((1.6 * mask * size) / alphabetLength)
+// Custom random function ID generator (core implementation)
+export const customRandom = (alphabet, defaultSize, getRandom) => {
+  if (!alphabet || alphabet.length === 0) {
+    throw new Error('Alphabet cannot be empty')
+  }
+  let mask = (2 << (31 - Math.clz32((alphabet.length - 1) | 1))) - 1
+  let step = Math.ceil((1.6 * mask * defaultSize) / alphabet.length)
+  return (size = defaultSize) => {
+    if (size <= 0) return ''
+    let id = ''
+    while (true) {
+      let bytes = getRandom(step)
+      let i = step
+      while (i--) {
+        id += alphabet[bytes[i] & mask] || ''
+        if (id.length >= size) return id
+      }
+    }
+  }
 }
 
 // Custom alphabet ID generator factory
@@ -68,64 +78,12 @@ export const customAlphabet = (alphabet, defaultSize = 21) => {
   if (alphabet.length > 256) {
     throw new Error('Alphabet cannot be longer than 256 characters')
   }
-
-  const mask = getMask(alphabet.length)
-
-  return (size = defaultSize) => {
-    if (size <= 0) return ''
-    size |= 0
-
-    const step = getStep(mask, size, alphabet.length)
-    let id = ''
-
-    while (true) {
-      const bytes = random(step)
-      let i = step
-      while (i--) {
-        const byte = bytes[i] & mask
-        if (byte < alphabet.length) {
-          id += alphabet[byte]
-          if (id.length === size) return id
-        }
-      }
-    }
-  }
-}
-
-// Custom random function ID generator
-export const customRandom = (alphabet, defaultSize, getRandom) => {
-  if (!alphabet || alphabet.length === 0) {
-    throw new Error('Alphabet cannot be empty')
-  }
-
-  const mask = getMask(alphabet.length)
-
-  return (size = defaultSize) => {
-    if (size <= 0) return ''
-    size |= 0
-
-    const step = getStep(mask, size, alphabet.length)
-    let id = ''
-
-    while (true) {
-      const bytes = getRandom(step)
-      let i = step
-      while (i--) {
-        const byte = bytes[i] & mask
-        if (byte < alphabet.length) {
-          id += alphabet[byte]
-          if (id.length === size) return id
-        }
-      }
-    }
-  }
+  return customRandom(alphabet, defaultSize, random)
 }
 
 // Main nopeid function
 export const nopeid = (size = 21) => {
-  if (size <= 0) return ''
   fillPool((size |= 0))
-
   let id = ''
   for (let i = poolOffset - size; i < poolOffset; i++) {
     id += urlAlphabet[pool[i] & 63]
@@ -153,6 +111,7 @@ const incrementRandom = () => {
 
 // ULID-like sortable ID with monotonic guarantee
 export const sortableId = (size = 22) => {
+  if (size <= 0) return ''
   const now = Date.now()
 
   if (now === lastTime) {
@@ -236,16 +195,7 @@ export const collisionProbability = (idLength, alphabetSize = 64) => {
 
 // Async version
 export const nopeidAsync = async (size = 21) => {
-  if (size <= 0) return ''
-
-  return new Promise(resolve => {
-    const bytes = crypto.getRandomValues(new Uint8Array(size))
-    let id = ''
-    for (let i = 0; i < size; i++) {
-      id += urlAlphabet[bytes[i] & 63]
-    }
-    resolve(id)
-  })
+  return nopeid(size)
 }
 
 // UUID v4
@@ -304,9 +254,17 @@ export const getFingerprint = () => {
 
 // Distributed-safe ID
 export const distributedId = (size = 25) => {
+  if (size <= 0) return ''
   const fp = getFingerprint()
-  const remaining = size - fp.length - 1
-  return `${fp}_${remaining > 0 ? nopeid(remaining) : ''}`
+  const separator = '_'
+  const base = fp + separator
+
+  if (size <= base.length) {
+    return base.slice(0, size)
+  }
+
+  const remaining = size - base.length
+  return base + nopeid(remaining)
 }
 
 export default nopeid

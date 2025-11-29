@@ -1,7 +1,7 @@
 // nope-id - Secure, fast, and collision-resistant unique ID generator
 // A better nanoid alternative with extra features
 
-import { randomBytes, randomFillSync } from 'crypto'
+import { webcrypto as crypto } from 'node:crypto'
 
 // URL-safe alphabet (optimized for compression)
 export const urlAlphabet =
@@ -35,10 +35,10 @@ let pool, poolOffset
 const fillPool = bytes => {
   if (!pool || pool.length < bytes) {
     pool = Buffer.allocUnsafe(bytes * POOL_SIZE_MULTIPLIER)
-    randomFillSync(pool)
+    crypto.getRandomValues(pool)
     poolOffset = 0
   } else if (poolOffset + bytes > pool.length) {
-    randomFillSync(pool)
+    crypto.getRandomValues(pool)
     poolOffset = 0
   }
   poolOffset += bytes
@@ -46,19 +46,29 @@ const fillPool = bytes => {
 
 // Get random bytes from pool
 export const random = bytes => {
-  if (bytes <= 0) return Buffer.alloc(0)
   fillPool((bytes |= 0))
   return pool.subarray(poolOffset - bytes, poolOffset)
 }
 
-// Calculate optimal mask for alphabet
-const getMask = alphabetLength => {
-  return (2 << (31 - Math.clz32((alphabetLength - 1) | 1))) - 1
-}
-
-// Calculate optimal step for given size and alphabet
-const getStep = (mask, size, alphabetLength) => {
-  return Math.ceil((1.6 * mask * size) / alphabetLength)
+// Custom random function ID generator (core implementation)
+export const customRandom = (alphabet, defaultSize, getRandom) => {
+  if (!alphabet || alphabet.length === 0) {
+    throw new Error('Alphabet cannot be empty')
+  }
+  let mask = (2 << (31 - Math.clz32((alphabet.length - 1) | 1))) - 1
+  let step = Math.ceil((1.6 * mask * defaultSize) / alphabet.length)
+  return (size = defaultSize) => {
+    if (size <= 0) return ''
+    let id = ''
+    while (true) {
+      let bytes = getRandom(step)
+      let i = step
+      while (i--) {
+        id += alphabet[bytes[i] & mask] || ''
+        if (id.length >= size) return id
+      }
+    }
+  }
 }
 
 // Custom alphabet ID generator factory
@@ -69,65 +79,12 @@ export const customAlphabet = (alphabet, defaultSize = 21) => {
   if (alphabet.length > 256) {
     throw new Error('Alphabet cannot be longer than 256 characters')
   }
-
-  const mask = getMask(alphabet.length)
-
-  return (size = defaultSize) => {
-    if (size <= 0) return ''
-    size |= 0
-
-    // Calculate step dynamically based on actual size
-    const step = getStep(mask, size, alphabet.length)
-    let id = ''
-
-    while (true) {
-      const bytes = random(step)
-      let i = step
-      while (i--) {
-        const byte = bytes[i] & mask
-        if (byte < alphabet.length) {
-          id += alphabet[byte]
-          if (id.length === size) return id
-        }
-      }
-    }
-  }
-}
-
-// Custom random function ID generator
-export const customRandom = (alphabet, defaultSize, getRandom) => {
-  if (!alphabet || alphabet.length === 0) {
-    throw new Error('Alphabet cannot be empty')
-  }
-
-  const mask = getMask(alphabet.length)
-
-  return (size = defaultSize) => {
-    if (size <= 0) return ''
-    size |= 0
-
-    const step = getStep(mask, size, alphabet.length)
-    let id = ''
-
-    while (true) {
-      const bytes = getRandom(step)
-      let i = step
-      while (i--) {
-        const byte = bytes[i] & mask
-        if (byte < alphabet.length) {
-          id += alphabet[byte]
-          if (id.length === size) return id
-        }
-      }
-    }
-  }
+  return customRandom(alphabet, defaultSize, random)
 }
 
 // Main nopeid function - 21 characters by default
 export const nopeid = (size = 21) => {
-  if (size <= 0) return ''
   fillPool((size |= 0))
-
   let id = ''
   for (let i = poolOffset - size; i < poolOffset; i++) {
     id += urlAlphabet[pool[i] & 63]
@@ -157,6 +114,7 @@ const incrementRandom = () => {
 // ULID-like sortable ID with monotonic guarantee
 // Format: 10 chars timestamp (base32) + 12 chars random (base32) = 22 chars
 export const sortableId = (size = 22) => {
+  if (size <= 0) return ''
   const now = Date.now()
 
   if (now === lastTime) {
@@ -250,18 +208,7 @@ export const collisionProbability = (idLength, alphabetSize = 64) => {
 
 // Async version for large batch operations
 export const nopeidAsync = async (size = 21) => {
-  if (size <= 0) return ''
-
-  return new Promise((resolve, reject) => {
-    randomBytes(size, (err, bytes) => {
-      if (err) return reject(err)
-      let id = ''
-      for (let i = 0; i < size; i++) {
-        id += urlAlphabet[bytes[i] & 63]
-      }
-      resolve(id)
-    })
-  })
+  return nopeid(size)
 }
 
 // UUID v4 generator
@@ -321,9 +268,17 @@ export const getFingerprint = () => {
 
 // Distributed-safe ID with fingerprint
 export const distributedId = (size = 25) => {
+  if (size <= 0) return ''
   const fp = getFingerprint()
-  const remaining = size - fp.length - 1
-  return `${fp}_${remaining > 0 ? nopeid(remaining) : ''}`
+  const separator = '_'
+  const base = fp + separator
+
+  if (size <= base.length) {
+    return base.slice(0, size)
+  }
+
+  const remaining = size - base.length
+  return base + nopeid(remaining)
 }
 
 // Default export

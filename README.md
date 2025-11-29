@@ -699,7 +699,7 @@ app.post('/legacy-api', (req, res) => {
 | Batch generation | ✅ | ❌ |
 | Validation | ✅ | ❌ |
 | Collision calculator | ✅ | ❌ |
-| Pre-built alphabets | ✅ (13) | Limited |
+| Pre-built alphabets | ✅ (14) | Limited |
 
 ---
 
@@ -721,7 +721,7 @@ Works in all modern browsers with Web Crypto API support.
 ## Security
 
 nope-id uses:
-- `crypto.randomFillSync()` in Node.js
+- `webcrypto.getRandomValues()` in Node.js
 - `crypto.getRandomValues()` in browsers
 
 Both are cryptographically secure random number generators (CSPRNG).
@@ -736,14 +736,44 @@ Both are cryptographically secure random number generators (CSPRNG).
 
 ## Performance
 
-Benchmark results (Node.js):
+### nope-id vs nanoid Benchmark
 
-```
-Secure version:     ~6,000,000 ops/sec
-Non-secure version: ~3,700,000 ops/sec
+Run the benchmark yourself:
+
+```bash
+npm run benchmark
 ```
 
-The secure version uses a byte pool to minimize system calls, making it faster than expected for cryptographic random generation.
+**Results (Node.js v20+, 100,000 iterations):**
+
+| Test | nanoid | nope-id | Winner |
+|------|--------|---------|--------|
+| Basic (21 chars) | ~5.3M ops/sec | ~5.3M ops/sec | Tie |
+| Small (10 chars) | ~10.9M ops/sec | ~11M ops/sec | **nope-id** |
+| Large (64 chars) | ~2.2M ops/sec | ~2.4M ops/sec | **nope-id** (~10% faster) |
+| Custom Alphabet | ~5.3M ops/sec | ~5.3M ops/sec | Tie |
+| Batch (100 IDs) | ~64K ops/sec | ~64K ops/sec | Tie |
+
+**Result: nope-id matches or beats nanoid** while providing many extra features!
+
+### Extra Features Performance
+
+These features are exclusive to nope-id (nanoid doesn't have them):
+
+| Feature | Performance |
+|---------|-------------|
+| `sortableId()` | ~2-4M ops/sec |
+| `prefixedId()` | ~4-5M ops/sec |
+| `uuid()` | ~4M ops/sec |
+| `slugId()` | ~3-4M ops/sec |
+| `shortId()` | ~6-7M ops/sec |
+
+### Why nope-id is Fast
+
+- **Byte Pool**: Minimizes crypto system calls by pre-allocating random bytes
+- **Optimized Masks**: Uses bitwise operations for alphabet mapping
+- **Pre-cached Generators**: Common functions like `slugId()` and `shortId()` use cached generators
+- **Zero Dependencies**: No external library overhead
 
 ---
 
