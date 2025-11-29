@@ -243,4 +243,85 @@ describe('uuid()', () => {
   })
 })
 
+// === UUID SECURITY TESTS ===
+
+describe('uuid() Security', () => {
+  test('generates 1000 unique UUIDs', () => {
+    const uuids = new Set()
+    for (let i = 0; i < 1000; i++) {
+      uuids.add(uuid())
+    }
+    assert.equal(uuids.size, 1000, 'All UUIDs should be unique')
+  })
+
+  test('UUID random bits have good distribution', () => {
+    // Check that random nibbles are uniformly distributed
+    const nibbleCounts = new Array(16).fill(0)
+
+    for (let i = 0; i < 100; i++) {
+      const id = uuid().replace(/-/g, '')
+      // Check nibbles that should be random (skip version and variant)
+      for (let j = 0; j < 32; j++) {
+        if (j === 12 || j === 16) continue // Skip version (12) and variant (16)
+        nibbleCounts[parseInt(id[j], 16)]++
+      }
+    }
+
+    // 100 UUIDs * 30 random nibbles = 3000 total
+    const expected = 3000 / 16
+    for (let i = 0; i < 16; i++) {
+      const deviation = Math.abs(nibbleCounts[i] - expected) / expected
+      assert.ok(deviation < 0.5, `Nibble ${i.toString(16)} deviation too high: ${deviation}`)
+    }
+  })
+})
+
+// === COLLISION PROBABILITY EDGE CASES ===
+
+describe('collisionProbability() Edge Cases', () => {
+  test('very short IDs have high collision probability', () => {
+    const info = collisionProbability(4, 64)
+    assert.ok(info.probabilityForBillion > 0.99, 'Short IDs should have near-certain collision for 1B')
+  })
+
+  test('very long IDs have near-zero collision probability', () => {
+    const info = collisionProbability(64, 64)
+    assert.ok(info.probabilityForBillion < 1e-50, 'Long IDs should have virtually no collision')
+  })
+
+  test('binary alphabet calculations', () => {
+    const info = collisionProbability(32, 2) // 32-bit binary = 4B possible values
+    assert.equal(info.totalPossible, Math.pow(2, 32))
+  })
+
+  test('single character alphabet', () => {
+    const info = collisionProbability(10, 1)
+    assert.equal(info.totalPossible, 1) // Only one possible ID
+  })
+})
+
+// === isValid() SECURITY TESTS ===
+
+describe('isValid() Security', () => {
+  test('rejects strings with null bytes', () => {
+    assert.equal(isValid('abc\0def'), false)
+  })
+
+  test('rejects strings with unicode zero-width chars', () => {
+    assert.equal(isValid('abc\u200Bdef'), false) // Zero-width space
+    assert.equal(isValid('abc\uFEFFdef'), false) // BOM
+  })
+
+  test('handles very long input', () => {
+    const longId = 'a'.repeat(100000)
+    const result = isValid(longId, 'a')
+    assert.equal(result, true)
+  })
+
+  test('handles empty alphabet', () => {
+    // With empty alphabet, nothing is valid
+    assert.equal(isValid('abc', ''), false)
+  })
+})
+
 export default runTests

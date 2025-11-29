@@ -30,17 +30,29 @@ export const alphabets = {
 const CROCKFORD_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
 
 // Pool management for reduced crypto calls
+// Max pool size is 65536 (crypto.getRandomValues limit)
 const POOL_SIZE_MULTIPLIER = 128
+const MAX_POOL_SIZE = 65536
 let pool = new Uint8Array(0)
 let poolOffset = 0
 
+// Fill buffer in chunks if larger than MAX_POOL_SIZE
+const fillBuffer = buffer => {
+  const len = buffer.length
+  for (let offset = 0; offset < len; offset += MAX_POOL_SIZE) {
+    const chunk = buffer.subarray(offset, Math.min(offset + MAX_POOL_SIZE, len))
+    crypto.getRandomValues(chunk)
+  }
+}
+
 const fillPool = bytes => {
   if (pool.length < bytes) {
-    pool = new Uint8Array(bytes * POOL_SIZE_MULTIPLIER)
-    crypto.getRandomValues(pool)
+    const poolSize = Math.min(bytes * POOL_SIZE_MULTIPLIER, MAX_POOL_SIZE)
+    pool = new Uint8Array(Math.max(poolSize, bytes))
+    fillBuffer(pool)
     poolOffset = 0
   } else if (poolOffset + bytes > pool.length) {
-    crypto.getRandomValues(pool)
+    fillBuffer(pool)
     poolOffset = 0
   }
   poolOffset += bytes
@@ -92,12 +104,14 @@ export const customAlphabet = (alphabet, defaultSize = 21) => {
 export const nopeid = (size = 21) => {
   // Inline pool management for hot path performance
   size |= 0
+  if (size <= 0) return ''
   if (pool.length < size) {
-    pool = new Uint8Array(size * POOL_SIZE_MULTIPLIER)
-    crypto.getRandomValues(pool)
+    const poolSize = Math.min(size * POOL_SIZE_MULTIPLIER, MAX_POOL_SIZE)
+    pool = new Uint8Array(Math.max(poolSize, size))
+    fillBuffer(pool)
     poolOffset = 0
   } else if (poolOffset + size > pool.length) {
-    crypto.getRandomValues(pool)
+    fillBuffer(pool)
     poolOffset = 0
   }
 

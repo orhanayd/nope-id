@@ -451,4 +451,260 @@ describe('customRandom() edge cases', () => {
   })
 })
 
+// === SECURITY & ENTROPY TESTS ===
+
+describe('Security: Entropy Quality', () => {
+  test('random bytes have good entropy distribution', () => {
+    // Collect multiple smaller samples to test distribution
+    // (single call is limited by pool size considerations)
+    const freq = new Array(256).fill(0)
+    const samplesNeeded = 10000
+    let totalBytes = 0
+
+    // Collect bytes in chunks that won't exceed pool limits
+    while (totalBytes < samplesNeeded) {
+      const chunkSize = Math.min(256, samplesNeeded - totalBytes)
+      const bytes = random(chunkSize)
+      for (let i = 0; i < bytes.length; i++) {
+        freq[bytes[i]]++
+      }
+      totalBytes += chunkSize
+    }
+
+    // Expected frequency per byte value
+    const expected = totalBytes / 256
+    const tolerance = expected * 0.5 // Allow 50% variance
+
+    let outliers = 0
+    for (let i = 0; i < 256; i++) {
+      if (Math.abs(freq[i] - expected) > tolerance) {
+        outliers++
+      }
+    }
+
+    // Less than 5% of byte values should be outliers
+    assert.ok(outliers < 13, `Too many outliers in byte distribution: ${outliers}`)
+  })
+
+  test('generated IDs have good character distribution', () => {
+    const charFreq = {}
+    const sampleSize = 10000
+
+    for (let i = 0; i < sampleSize; i++) {
+      const id = nopeid(21)
+      for (const char of id) {
+        charFreq[char] = (charFreq[char] || 0) + 1
+      }
+    }
+
+    const totalChars = sampleSize * 21
+    const expectedPerChar = totalChars / 64 // 64 char alphabet
+    const tolerance = expectedPerChar * 0.3 // Allow 30% variance
+
+    let outliers = 0
+    for (const char of urlAlphabet) {
+      const count = charFreq[char] || 0
+      if (Math.abs(count - expectedPerChar) > tolerance) {
+        outliers++
+      }
+    }
+
+    // Less than 10% of characters should be outliers
+    assert.ok(outliers < 7, `Character distribution not uniform: ${outliers} outliers`)
+  })
+
+  test('no predictable patterns in sequential IDs', () => {
+    const ids = []
+    for (let i = 0; i < 100; i++) {
+      ids.push(nopeid())
+    }
+
+    // Check no two consecutive IDs share more than 50% characters in same position
+    for (let i = 1; i < ids.length; i++) {
+      let samePos = 0
+      for (let j = 0; j < 21; j++) {
+        if (ids[i][j] === ids[i-1][j]) samePos++
+      }
+      assert.ok(samePos < 11, `Sequential IDs too similar: ${samePos}/21 same positions`)
+    }
+  })
+
+  test('chi-square test for randomness', () => {
+    const observed = new Array(64).fill(0)
+    const sampleSize = 6400 // 100 IDs * 64 chars each for nice numbers
+
+    for (let i = 0; i < 100; i++) {
+      const id = nopeid(64)
+      for (const char of id) {
+        const idx = urlAlphabet.indexOf(char)
+        observed[idx]++
+      }
+    }
+
+    const expected = sampleSize / 64
+    let chiSquare = 0
+    for (let i = 0; i < 64; i++) {
+      chiSquare += Math.pow(observed[i] - expected, 2) / expected
+    }
+
+    // Chi-square critical value for 63 df at 0.01 significance is ~92
+    // At 0.05 it's ~82. We use a generous threshold.
+    assert.ok(chiSquare < 120, `Chi-square too high: ${chiSquare.toFixed(2)}`)
+  })
+})
+
+// === BOUNDARY & STRESS TESTS ===
+
+describe('Boundary Tests', () => {
+  test('handles size = 1 correctly', () => {
+    for (let i = 0; i < 100; i++) {
+      const id = nopeid(1)
+      assert.equal(id.length, 1)
+      assert.ok(urlAlphabet.includes(id))
+    }
+  })
+
+  test('handles maximum practical size', () => {
+    const id = nopeid(10000)
+    assert.equal(id.length, 10000)
+    for (const char of id) {
+      assert.ok(urlAlphabet.includes(char))
+    }
+  })
+
+  test('handles size = 0', () => {
+    assert.equal(nopeid(0), '')
+  })
+
+  test('handles negative sizes', () => {
+    assert.equal(nopeid(-1), '')
+    assert.equal(nopeid(-100), '')
+    assert.equal(nopeid(-Infinity), '')
+  })
+
+  test('handles NaN size', () => {
+    const id = nopeid(NaN)
+    assert.equal(id, '')
+  })
+
+  test('handles Infinity size gracefully', () => {
+    // Should not hang - Infinity |= 0 becomes 0
+    const id = nopeid(Infinity)
+    assert.equal(id, '')
+  })
+})
+
+describe('Stress Tests', () => {
+  test('rapid sequential generation (10000 IDs)', () => {
+    const ids = new Set()
+    for (let i = 0; i < 10000; i++) {
+      ids.add(nopeid())
+    }
+    assert.equal(ids.size, 10000, 'All 10000 rapid IDs should be unique')
+  })
+
+  test('pool exhaustion and refill cycle', () => {
+    // Generate enough to exhaust pool multiple times
+    // Pool size = 21 * 128 = 2688 bytes, so ~128 IDs per pool
+    const ids = new Set()
+    for (let i = 0; i < 1000; i++) {
+      ids.add(nopeid(21))
+    }
+    assert.equal(ids.size, 1000, 'All IDs unique across pool refills')
+  })
+
+  test('varying sizes in sequence', () => {
+    const ids = []
+    for (let i = 1; i <= 100; i++) {
+      ids.push(nopeid(i))
+    }
+
+    for (let i = 0; i < 100; i++) {
+      assert.equal(ids[i].length, i + 1)
+    }
+  })
+
+  test('alternating between different generators', () => {
+    const results = []
+    for (let i = 0; i < 100; i++) {
+      results.push(nopeid())
+      results.push(customAlphabet('abc', 10)())
+      results.push(random(16))
+    }
+    assert.equal(results.length, 300)
+  })
+})
+
+// === TYPE COERCION TESTS ===
+
+describe('Type Coercion Edge Cases', () => {
+  test('string number size', () => {
+    const id = nopeid('21')
+    assert.ok(id.length > 0)
+  })
+
+  test('boolean size', () => {
+    const idTrue = nopeid(true) // true |= 0 => 1
+    const idFalse = nopeid(false) // false |= 0 => 0
+    assert.equal(idTrue.length, 1)
+    assert.equal(idFalse.length, 0)
+  })
+
+  test('null size', () => {
+    const id = nopeid(null) // null |= 0 => 0
+    assert.equal(id, '')
+  })
+
+  test('undefined uses default', () => {
+    const id = nopeid(undefined)
+    assert.equal(id.length, 21)
+  })
+
+  test('object size', () => {
+    const id = nopeid({}) // {} |= 0 => 0
+    assert.equal(id, '')
+  })
+
+  test('array size', () => {
+    const id1 = nopeid([10]) // [10] |= 0 => 10
+    const id2 = nopeid([]) // [] |= 0 => 0
+    assert.equal(id1.length, 10)
+    assert.equal(id2.length, 0)
+  })
+})
+
+// === CROSS-MODULE CONSISTENCY TESTS ===
+
+describe('Cross-Module Consistency', () => {
+  test('urlAlphabet matches expected', () => {
+    assert.equal(urlAlphabet.length, 64)
+    assert.equal(urlAlphabet, 'useandom-26T198340PX75pxJACKVERYMINDBUSHWOLF_GQZbfghjklqvwyzrict')
+  })
+
+  test('all alphabet characters are ASCII printable', () => {
+    for (const char of urlAlphabet) {
+      const code = char.charCodeAt(0)
+      assert.ok(code >= 32 && code <= 126, `Non-printable char: ${code}`)
+    }
+  })
+
+  test('random returns Buffer/Uint8Array with correct length', () => {
+    const sizes = [0, 1, 16, 100, 1000]
+    for (const size of sizes) {
+      const bytes = random(size)
+      assert.equal(bytes.length, size)
+    }
+  })
+
+  test('customAlphabet respects alphabet constraint', () => {
+    const alpha = 'XYZ'
+    const gen = customAlphabet(alpha, 100)
+    const id = gen()
+
+    for (const char of id) {
+      assert.ok(alpha.includes(char), `Unexpected char: ${char}`)
+    }
+  })
+})
+
 export default runTests
