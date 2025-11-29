@@ -1,0 +1,330 @@
+// nope-id - Secure, fast, and collision-resistant unique ID generator
+// A better nanoid alternative with extra features
+
+import { randomBytes, randomFillSync } from 'crypto'
+
+// URL-safe alphabet (optimized for compression)
+export const urlAlphabet =
+  'useandom-26T198340PX75pxJACKVERYMINDBUSHWOLF_GQZbfghjklqvwyzrict'
+
+// Pre-built alphabets for different use cases
+export const alphabets = {
+  alphanumeric: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz',
+  lowercase: 'abcdefghijklmnopqrstuvwxyz',
+  uppercase: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+  numbers: '0123456789',
+  hexLower: '0123456789abcdef',
+  hexUpper: '0123456789ABCDEF',
+  nolookalikes: '346789ABCDEFGHJKLMNPQRTUVWXYabcdefghjkmnpqrtwxyz',
+  nolookalikesSafe: '6789BCDFGHJKLMNPQRTWbcdfghjkmnpqrtwz',
+  binary: '01',
+  octal: '01234567',
+  base32: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567',
+  base32Lower: 'abcdefghijklmnopqrstuvwxyz234567',
+  base58: '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz',
+  filename: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_',
+}
+
+// Crockford's Base32 alphabet for sortable IDs (lexicographically sortable)
+const CROCKFORD_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+
+// Pool management for reduced system calls
+const POOL_SIZE_MULTIPLIER = 128
+let pool, poolOffset
+
+const fillPool = bytes => {
+  if (!pool || pool.length < bytes) {
+    pool = Buffer.allocUnsafe(bytes * POOL_SIZE_MULTIPLIER)
+    randomFillSync(pool)
+    poolOffset = 0
+  } else if (poolOffset + bytes > pool.length) {
+    randomFillSync(pool)
+    poolOffset = 0
+  }
+  poolOffset += bytes
+}
+
+// Get random bytes from pool
+export const random = bytes => {
+  if (bytes <= 0) return Buffer.alloc(0)
+  fillPool((bytes |= 0))
+  return pool.subarray(poolOffset - bytes, poolOffset)
+}
+
+// Calculate optimal mask for alphabet
+const getMask = alphabetLength => {
+  return (2 << (31 - Math.clz32((alphabetLength - 1) | 1))) - 1
+}
+
+// Calculate optimal step for given size and alphabet
+const getStep = (mask, size, alphabetLength) => {
+  return Math.ceil((1.6 * mask * size) / alphabetLength)
+}
+
+// Custom alphabet ID generator factory
+export const customAlphabet = (alphabet, defaultSize = 21) => {
+  if (!alphabet || alphabet.length === 0) {
+    throw new Error('Alphabet cannot be empty')
+  }
+  if (alphabet.length > 256) {
+    throw new Error('Alphabet cannot be longer than 256 characters')
+  }
+
+  const mask = getMask(alphabet.length)
+
+  return (size = defaultSize) => {
+    if (size <= 0) return ''
+    size |= 0
+
+    // Calculate step dynamically based on actual size
+    const step = getStep(mask, size, alphabet.length)
+    let id = ''
+
+    while (true) {
+      const bytes = random(step)
+      let i = step
+      while (i--) {
+        const byte = bytes[i] & mask
+        if (byte < alphabet.length) {
+          id += alphabet[byte]
+          if (id.length === size) return id
+        }
+      }
+    }
+  }
+}
+
+// Custom random function ID generator
+export const customRandom = (alphabet, defaultSize, getRandom) => {
+  if (!alphabet || alphabet.length === 0) {
+    throw new Error('Alphabet cannot be empty')
+  }
+
+  const mask = getMask(alphabet.length)
+
+  return (size = defaultSize) => {
+    if (size <= 0) return ''
+    size |= 0
+
+    const step = getStep(mask, size, alphabet.length)
+    let id = ''
+
+    while (true) {
+      const bytes = getRandom(step)
+      let i = step
+      while (i--) {
+        const byte = bytes[i] & mask
+        if (byte < alphabet.length) {
+          id += alphabet[byte]
+          if (id.length === size) return id
+        }
+      }
+    }
+  }
+}
+
+// Main nopeid function - 21 characters by default
+export const nopeid = (size = 21) => {
+  if (size <= 0) return ''
+  fillPool((size |= 0))
+
+  let id = ''
+  for (let i = poolOffset - size; i < poolOffset; i++) {
+    id += urlAlphabet[pool[i] & 63]
+  }
+  return id
+}
+
+// === COLLISION-RESISTANT FEATURES ===
+
+// Monotonic state for sortable IDs
+let lastTime = 0
+let lastRandom = []
+const RANDOM_LENGTH = 12
+
+// Increment random part for same-millisecond IDs
+const incrementRandom = () => {
+  for (let i = RANDOM_LENGTH - 1; i >= 0; i--) {
+    if (lastRandom[i] < 31) {
+      lastRandom[i]++
+      return true
+    }
+    lastRandom[i] = 0
+  }
+  return false // Overflow - need new timestamp
+}
+
+// ULID-like sortable ID with monotonic guarantee
+// Format: 10 chars timestamp (base32) + 12 chars random (base32) = 22 chars
+export const sortableId = (size = 22) => {
+  const now = Date.now()
+
+  if (now === lastTime) {
+    // Same millisecond - increment random part for monotonicity
+    if (!incrementRandom()) {
+      // Random overflow - wait for next millisecond
+      while (Date.now() === now) {
+        // Busy wait (very rare case)
+      }
+      return sortableId(size)
+    }
+  } else {
+    // New millisecond - generate fresh random
+    lastTime = now
+    const bytes = random(RANDOM_LENGTH)
+    lastRandom = Array.from(bytes, b => b & 31)
+  }
+
+  // Encode timestamp (10 chars, supports until year 10889)
+  let timestamp = ''
+  let t = now
+  for (let i = 9; i >= 0; i--) {
+    timestamp = CROCKFORD_ALPHABET[t & 31] + timestamp
+    t = Math.floor(t / 32)
+  }
+
+  // Encode random part
+  let randomPart = ''
+  for (let i = 0; i < RANDOM_LENGTH; i++) {
+    randomPart += CROCKFORD_ALPHABET[lastRandom[i]]
+  }
+
+  const fullId = timestamp + randomPart
+
+  // If size is different, adjust
+  if (size >= 22) {
+    return size === 22 ? fullId : fullId + nopeid(size - 22)
+  }
+  return fullId.slice(0, size)
+}
+
+// Prefixed ID generator
+export const prefixedId = (prefix, size = 21, separator = '_') => {
+  if (typeof prefix !== 'string') {
+    throw new Error('Prefix must be a string')
+  }
+  return `${prefix}${separator}${nopeid(size)}`
+}
+
+// Generate multiple unique IDs at once
+export const generateMany = (count, size = 21) => {
+  if (count <= 0) return []
+  count |= 0
+
+  const ids = new Array(count)
+  for (let i = 0; i < count; i++) {
+    ids[i] = nopeid(size)
+  }
+  return ids
+}
+
+// Validate if a string is a valid ID for given alphabet
+export const isValid = (id, alphabet = urlAlphabet) => {
+  if (typeof id !== 'string' || id.length === 0) return false
+
+  // Use Set for O(1) lookup on large alphabets
+  const charSet = new Set(alphabet)
+  for (let i = 0; i < id.length; i++) {
+    if (!charSet.has(id[i])) return false
+  }
+  return true
+}
+
+// Calculate collision probability using birthday paradox
+export const collisionProbability = (idLength, alphabetSize = 64) => {
+  if (idLength <= 0 || alphabetSize <= 0) {
+    throw new Error('Length and alphabet size must be positive')
+  }
+
+  const possibleIds = alphabetSize ** idLength
+  return {
+    totalPossible: possibleIds,
+    // Probability of collision when generating 1 billion IDs
+    probabilityForBillion: 1 - Math.exp((-1e9 * (1e9 - 1)) / (2 * possibleIds)),
+    // Safe count before 50% collision probability
+    safeCount: Math.sqrt(2 * possibleIds * Math.log(2)),
+    // Years to generate 1 ID/ms before 1% collision probability
+    yearsFor1Percent: Math.sqrt(2 * possibleIds * 0.01) / (365.25 * 24 * 60 * 60 * 1000),
+  }
+}
+
+// Async version for large batch operations
+export const nopeidAsync = async (size = 21) => {
+  if (size <= 0) return ''
+
+  return new Promise((resolve, reject) => {
+    randomBytes(size, (err, bytes) => {
+      if (err) return reject(err)
+      let id = ''
+      for (let i = 0; i < size; i++) {
+        id += urlAlphabet[bytes[i] & 63]
+      }
+      resolve(id)
+    })
+  })
+}
+
+// UUID v4 generator
+export const uuid = () => {
+  const bytes = random(16)
+  bytes[6] = (bytes[6] & 0x0f) | 0x40 // version 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80 // variant RFC4122
+
+  const hex = bytes.toString('hex')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`
+}
+
+// Pre-cached generators for common use cases (performance optimization)
+const slugGenerator = customAlphabet(alphabets.lowercase + alphabets.numbers, 12)
+const shortGenerator = customAlphabet(alphabets.nolookalikes, 8)
+
+// Slug-friendly ID (lowercase + numbers only)
+export const slugId = (size = 12) => {
+  if (size === 12) return slugGenerator()
+  return customAlphabet(alphabets.lowercase + alphabets.numbers, size)()
+}
+
+// Short ID without similar-looking characters
+export const shortId = (size = 8) => {
+  if (size === 8) return shortGenerator()
+  return customAlphabet(alphabets.nolookalikes, size)()
+}
+
+// Decode sortable ID timestamp
+export const decodeTime = sortableIdStr => {
+  if (!sortableIdStr || sortableIdStr.length < 10) {
+    throw new Error('Invalid sortable ID')
+  }
+
+  let timestamp = 0
+  for (let i = 0; i < 10; i++) {
+    const char = sortableIdStr[i].toUpperCase()
+    const index = CROCKFORD_ALPHABET.indexOf(char)
+    if (index === -1) {
+      throw new Error(`Invalid character '${sortableIdStr[i]}' in sortable ID`)
+    }
+    timestamp = timestamp * 32 + index
+  }
+
+  return new Date(timestamp)
+}
+
+// Fingerprint generator (device/process specific prefix)
+let fingerprint = null
+export const getFingerprint = () => {
+  if (fingerprint === null) {
+    // Generate once per process
+    fingerprint = nopeid(4)
+  }
+  return fingerprint
+}
+
+// Distributed-safe ID with fingerprint
+export const distributedId = (size = 25) => {
+  const fp = getFingerprint()
+  const remaining = size - fp.length - 1
+  return `${fp}_${remaining > 0 ? nopeid(remaining) : ''}`
+}
+
+// Default export
+export default nopeid
