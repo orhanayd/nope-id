@@ -49,6 +49,7 @@
 		"test:features": "node --test tests/features.test.js",
 		"test:utils": "node --test tests/utils.test.js",
 		"test:non-secure": "node --test tests/non-secure.test.js",
+		"test:randomness": "node tests/randomness.test.js",
 		"benchmark": "node benchmarks/benchmark.js"
 	},
 	"repository": {
