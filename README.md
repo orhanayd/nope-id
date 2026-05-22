@@ -788,7 +788,7 @@ app.post('/legacy-api', (req, res) => {
 | Secure random | ✅ | ✅ |
 | URL-safe | ✅ | ✅ |
 | TypeScript | ✅ | ✅ |
-| ESM + CJS | ✅ | ✅ |
+| ESM + CommonJS | ✅ | ⚠️ ESM-only (dropped CJS in v4) |
 | Prefixed IDs | ✅ | ❌ |
 | Sortable IDs (ULID-like) | ✅ | ❌ |
 | Monotonic guarantee | ✅ | ❌ |
