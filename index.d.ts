@@ -102,7 +102,7 @@ export function prefixedId(
  * Same-millisecond IDs are guaranteed to be monotonically increasing
  * Sizes > 22 are padded with extra Crockford Base32 random chars; sizes < 22 are
  * truncated to the timestamp prefix, which weakens the same-millisecond monotonic /
- * uniqueness guarantee — use size >= 22 when you rely on monotonicity.
+ * uniqueness guarantee, so use size >= 22 when you rely on monotonicity.
  * @param size - Total ID length (default: 22)
  * @returns Sortable ID string (chronologically sortable)
  */

@@ -125,7 +125,7 @@ export const customAlphabet = (alphabet, defaultSize = 21) => {
     throw new Error('Alphabet cannot be longer than 256 characters')
   }
   // Same rejection sampling as customRandom, but reads the shared pool directly
-  // (no per-call subarray allocation) for speed — this also powers slugId/shortId.
+  // (no per-call subarray allocation) for speed; this also powers slugId/shortId.
   const alphabetLookup = alphabet.split('')
   const len = alphabet.length
   const mask = (2 << (31 - Math.clz32((len - 1) | 1))) - 1
