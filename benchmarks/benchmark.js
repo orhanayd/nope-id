@@ -11,24 +11,32 @@ import {
   uuid,
   slugId,
   shortId,
+  uuidv7,
+  ulid,
+  monotonicFactory,
+  snowflakeFactory,
+  objectId,
+  sqidsFactory,
 } from '../index.js'
 
 const ITERATIONS = 100000
-const WARMUP = 1000
+const WARMUP = 20000
+const TRIALS = 5
 
-// Benchmark utility
+// Benchmark utility: warm up, then take the fastest of several trials. Best-of-N
+// reflects warm steady-state throughput and removes single-shot noise (GC, scheduling).
 const benchmark = (name, fn, iterations = ITERATIONS) => {
-  // Warmup
   for (let i = 0; i < WARMUP; i++) fn()
 
-  const start = performance.now()
-  for (let i = 0; i < iterations; i++) fn()
-  const end = performance.now()
+  let opsPerSec = 0
+  for (let t = 0; t < TRIALS; t++) {
+    const start = performance.now()
+    for (let i = 0; i < iterations; i++) fn()
+    const ops = Math.round((iterations / (performance.now() - start)) * 1000)
+    if (ops > opsPerSec) opsPerSec = ops
+  }
 
-  const duration = end - start
-  const opsPerSec = Math.round((iterations / duration) * 1000)
-
-  return { name, duration, iterations, opsPerSec }
+  return { name, iterations, opsPerSec }
 }
 
 // Format number with commas
@@ -56,8 +64,12 @@ const printResult = (result, baseline = null) => {
 console.log('\n' + '═'.repeat(70))
 console.log('  nope-id vs nanoid - Performance Benchmark')
 console.log('═'.repeat(70))
-console.log(`  Iterations: ${formatNumber(ITERATIONS)} | Warmup: ${formatNumber(WARMUP)}`)
+console.log(`  Iterations: ${formatNumber(ITERATIONS)} | Warmup: ${formatNumber(WARMUP)} | Best of ${TRIALS} trials`)
 console.log('─'.repeat(70))
+
+// Global warmup so the CPU/JIT is hot before the first timed comparison — otherwise
+// whichever library is measured first is unfairly penalized by a cold start.
+for (let i = 0; i < 500000; i++) { nanoid(); nopeid() }
 
 // ============================================
 // 1. Basic ID Generation (21 chars)
@@ -122,6 +134,22 @@ printResult(prefixedResult)
 printResult(uuidResult)
 printResult(slugResult)
 printResult(shortResult)
+
+// ============================================
+// 5b. New ID Types
+// ============================================
+console.log('\n\x1b[1m📊 New ID Types\x1b[0m\n')
+
+const nextSnowflake = snowflakeFactory({ nodeId: 1 })
+const nextMono = monotonicFactory()
+const sqidsGen = sqidsFactory()
+
+printResult(benchmark('uuidv7()', () => uuidv7()))
+printResult(benchmark('ulid()', () => ulid()))
+printResult(benchmark('monotonicFactory next', () => nextMono()))
+printResult(benchmark('snowflake (factory)', () => nextSnowflake()))
+printResult(benchmark('objectId()', () => objectId()))
+printResult(benchmark('sqids encode [1,2,3]', () => sqidsGen.encode([1, 2, 3])))
 
 // ============================================
 // 6. Batch Generation

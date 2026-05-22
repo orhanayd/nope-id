@@ -104,7 +104,11 @@ export const sortableId = (size = 22) => {
   const fullId = timestamp + randomPart
 
   if (size >= 22) {
-    return size === 22 ? fullId : fullId + nopeid(size - 22)
+    if (size === 22) return fullId
+    // Extend with Crockford Base32 to match the rest of the ID's alphabet
+    let tail = ''
+    for (let i = 0; i < size - 22; i++) tail += CROCKFORD_ALPHABET[(Math.random() * 32) | 0]
+    return fullId + tail
   }
   return fullId.slice(0, size)
 }

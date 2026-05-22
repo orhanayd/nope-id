@@ -100,6 +100,9 @@ export function prefixedId(
  * Uses Crockford's Base32 for lexicographic sorting
  * Format: 10 chars timestamp + 12 chars random = 22 chars default
  * Same-millisecond IDs are guaranteed to be monotonically increasing
+ * Sizes > 22 are padded with extra Crockford Base32 random chars; sizes < 22 are
+ * truncated to the timestamp prefix, which weakens the same-millisecond monotonic /
+ * uniqueness guarantee — use size >= 22 when you rely on monotonicity.
  * @param size - Total ID length (default: 22)
  * @returns Sortable ID string (chronologically sortable)
  */
@@ -125,8 +128,10 @@ export function isValid(id: string, alphabet?: string): boolean
  * Collision probability information
  */
 export interface CollisionInfo {
-  /** Total possible unique IDs with given length and alphabet */
+  /** Total possible unique IDs, clamped to Number.MAX_SAFE_INTEGER (use totalPossibleBigInt for the exact value) */
   totalPossible: number
+  /** Exact total possible unique IDs as a BigInt (alphabetSize ** idLength) */
+  totalPossibleBigInt: bigint
   /** Probability of collision when generating 1 billion IDs */
   probabilityForBillion: number
   /** Number of IDs that can be safely generated (50% collision probability) */
@@ -197,5 +202,143 @@ export function getFingerprint(): string
  * @returns Distributed-safe ID string
  */
 export function distributedId(size?: number): string
+
+/**
+ * Generate a UUID v7 (RFC 9562) - time-ordered, index-friendly.
+ * 48-bit Unix ms timestamp + version + variant + 74 random bits.
+ * @returns UUID v7 string (e.g. '0192f3a1-...-7...-...')
+ */
+export function uuidv7(): string
+
+/**
+ * Generate a spec-compliant 26-char ULID (Crockford Base32).
+ * 10 chars timestamp + 16 chars randomness. Non-monotonic per call;
+ * use monotonicFactory() for guaranteed same-millisecond ordering.
+ * @param seedTime - Optional timestamp in ms (default: Date.now())
+ * @returns 26-character ULID string (decode the time with decodeTime())
+ */
+export function ulid(seedTime?: number): string
+
+/**
+ * Create a monotonic ULID generator with isolated state.
+ * Same/backwards-millisecond calls increment the random part so output is
+ * strictly increasing. Does not touch the global sortableId() state.
+ * @returns A function that generates monotonic 26-char ULIDs
+ */
+export function monotonicFactory(): (seedTime?: number) => string
+
+/** Options for {@link snowflakeFactory} */
+export interface SnowflakeOptions {
+  /** 10-bit node/machine id (0-1023, default 0) */
+  nodeId?: number
+  /** Custom epoch in ms (default: Twitter epoch 1288834974657) */
+  epoch?: number | bigint
+}
+
+/** Decoded Snowflake components */
+export interface SnowflakeParts {
+  timestamp: Date
+  nodeId: number
+  sequence: number
+}
+
+/**
+ * Create a Snowflake ID generator (distributed 64-bit id, returned as a string).
+ * Layout: 41-bit timestamp | 10-bit nodeId | 12-bit sequence.
+ * Each factory owns its own sequence/timestamp state (coordination-free per node).
+ * @returns A function that returns the next snowflake id as a string
+ */
+export function snowflakeFactory(options?: SnowflakeOptions): () => string
+
+/**
+ * Default single-node Snowflake generator (node id derived from the process fingerprint).
+ * @returns Snowflake id as a string
+ */
+export function snowflake(): string
+
+/**
+ * Decode a snowflake id string into its components.
+ * @param id - Snowflake id string
+ * @param epoch - Epoch used at generation (default: Twitter epoch)
+ */
+export function decodeSnowflake(id: string, epoch?: number | bigint): SnowflakeParts
+
+/**
+ * Generate a MongoDB ObjectId-compatible 24-char hex id.
+ * 4-byte timestamp + 5-byte per-process value + 3-byte incrementing counter.
+ * @returns 24-character lowercase hex string
+ */
+export function objectId(): string
+
+/**
+ * Extract the creation Date from an ObjectId (first 4 bytes = seconds since epoch).
+ * @param id - ObjectId hex string (at least 8 characters)
+ * @throws Error if id is too short
+ */
+export function decodeObjectIdTime(id: string): Date
+
+/** Options for {@link sqidsFactory} */
+export interface SqidsOptions {
+  /** Custom alphabet (>= 3 unique characters) */
+  alphabet?: string
+  /** Minimum output length (default 0) */
+  minLength?: number
+  /** Words to avoid in generated ids (default: none) */
+  blocklist?: string[]
+}
+
+/** Sqids encoder/decoder pair */
+export interface Sqids {
+  /** Encode an array of non-negative integers into a short reversible string */
+  encode(numbers: number[]): string
+  /** Decode a string back into the original array of integers */
+  decode(id: string): number[]
+}
+
+/**
+ * Create a Sqids encoder/decoder for reversible integer <-> short-string mapping.
+ * Obfuscation only - NOT encryption.
+ */
+export function sqidsFactory(options?: SqidsOptions): Sqids
+
+/** Options for {@link defineId} */
+export interface DefineIdOptions {
+  /** Random part length (default 21) */
+  size?: number
+  /** Separator between prefix and random part (default '_') */
+  separator?: string
+  /** Alphabet for the random part (default urlAlphabet) */
+  alphabet?: string
+}
+
+/** A typed prefixed-id helper returned by {@link defineId} (assumes the default '_' separator for its type) */
+export interface TypedId<P extends string> {
+  /** Generate a new prefixed id of the form `${P}_${string}` */
+  generate(): `${P}_${string}`
+  /** Type guard: narrows value to `${P}_${string}` when true */
+  is(value: unknown): value is `${P}_${string}`
+  /** Parse into { prefix, id } or null if it does not match */
+  parse(value: string): { prefix: P; id: string } | null
+}
+
+/**
+ * Define a typed prefixed-id helper (Stripe-style), e.g. `defineId('user')`.
+ * The template-literal return type gives compile-time safety on generated ids.
+ * @param prefix - The id prefix (e.g. 'user', 'order')
+ */
+export function defineId<P extends string>(prefix: P, options?: DefineIdOptions): TypedId<P>
+
+/**
+ * Validate a UUID string (any version 1-8 by default).
+ * @param id - String to validate
+ * @param version - Optional specific version (1-8) to require
+ */
+export function isValidUUID(id: string, version?: number): boolean
+
+/**
+ * Validate a 26-character Crockford Base32 ULID.
+ * @param id - String to validate
+ */
+export function isValidULID(id: string): boolean
 
 export default nopeid

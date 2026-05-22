@@ -570,3 +570,8 @@ describe('Concurrent generation', () => {
 })
 
 export default runTests
+
+// Auto-run when executed directly (e.g. `node tests/features.test.js`): print summary +
+// exit non-zero on failure. No-op when imported by tests/index.js (that file is argv[1]).
+import { fileURLToPath } from 'node:url'
+if (process.argv[1] === fileURLToPath(import.meta.url)) runTests()
