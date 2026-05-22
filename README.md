@@ -1022,22 +1022,28 @@ nope-id ships a spec-compliant `ulid()` plus an isolated `monotonicFactory()`. S
 
 nope-id is far faster for plain `ulid()` because it draws randomness from a pooled buffer (one fill per 16 IDs), whereas the `ulid` package fetches randomness per character. Decode the timestamp from either with `decodeTime()`. (The `ulid` package is also zero-dependency.)
 
-### Other random string generators
+### Speed vs entropy: where each library lands
 
-These all return a random string id; what differs is the alphabet, the security model, and the speed.
+Two things matter for an id generator: **speed** and **entropy**, the amount of real randomness each id carries (its security against being guessed). These are all good libraries; the table shows the trade-off each one makes, measured at 21 characters where the length is configurable:
 
-| Generator | ops/sec | Notes |
-|---|---|---|
-| `uid/secure(21)` | ~10M | crypto, but **16-char hex** (~84 bits in 21 chars) |
-| nope-id `nopeid()` | ~8M | CSPRNG, **64-char URL-safe** (~126 bits in 21 chars) |
-| nanoid | ~6.5M | CSPRNG, 64-char URL-safe |
-| `rndm` | ~3.1M | **`Math.random`, not cryptographically secure** |
-| `secure-random-string` | ~0.7M | crypto-secure, but base64 (not URL-safe by default) |
-| cuid2 `createId()` | ~7K | hash-based, unguessable; throttled on purpose |
+| Generator | ops/sec | entropy / id | randomness source |
+|---|---|---|---|
+| `uid/secure` | ~10M | ~84 bits (16-char hex) | CSPRNG |
+| **nope-id `nopeid()`** | **~8M** | **~126 bits (64-char URL-safe)** | **CSPRNG** |
+| nanoid | ~6.5M | ~126 bits (64-char URL-safe) | CSPRNG |
+| `rndm` | ~3.1M | ~125 bits, but predictable | `Math.random` (not secure) |
+| `secure-random-string` | ~0.7M | ~126 bits (base64, not URL-safe) | CSPRNG |
+| cuid2 `createId()` | ~7K | 24-char, hash-derived | CSPRNG + SHA-3 |
 
-Honest read: nope-id is **not** the single fastest here. `uid/secure` is faster, but it emits 16-char hex, so a 21-char `uid` carries ~84 bits against nope-id's ~126 bits over the same length (for equal entropy, `uid` needs more characters). Among the **full-alphabet, URL-safe** generators (the nanoid family) nope-id is the fastest, and it keeps the densest entropy per character. `rndm` is fast only because it uses `Math.random` (its own README calls it "not cryptographically secure"). cuid2 is intentionally slow for its hardened, sharding-safe model.
+Read as two axes, **speed** and **security**, every other library gives something up on one of them:
 
-So nope-id's aim is not to win every microbenchmark (native `crypto.randomUUID()` and minimal hex tools like `uid` are faster). It is to be the fastest **while preserving maximum randomness per character**, in one zero-dependency package that also covers UUID v4/v7, ULID, Snowflake, ObjectId, Sqids and typed IDs.
+- **`uid/secure`** wins on raw speed, but pays with a smaller alphabet: ~84 bits per 21-char id against nope-id's ~126. For equal security you would have to make `uid` longer.
+- **`rndm`** is fast too, but it is built on `Math.random`, so its bits are predictable; its own README calls it "not cryptographically secure."
+- **`secure-random-string`** matches nope-id's entropy but is roughly 10x slower and emits base64 (not URL-safe).
+- **cuid2** spends speed on purpose for a hardened, sharding-safe, hash-based model.
+- **nanoid** matches nope-id's entropy exactly (same 64-char alphabet); nope-id is simply the faster of the two.
+
+nope-id is the one row that has **all three at once**: maximum entropy per character (126 bits), a real CSPRNG, and top-tier speed. That is the whole design goal, fast without ever spending randomness to get there. (For a plain v4 UUID, native `crypto.randomUUID()` is still faster at 122 bits in C++, so use it when a UUID is all you need.)
 
 ### Extra Features Performance
 
