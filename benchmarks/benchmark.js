@@ -22,6 +22,10 @@ import { randomUUID } from 'node:crypto'
 import { v4 as uuidV4, v7 as uuidV7 } from 'uuid'
 import { ulid as ulidPkg, monotonicFactory as ulidMonoFactory } from 'ulid'
 import { createId as cuid2 } from '@paralleldrive/cuid2'
+import rndm from 'rndm'
+import srs from 'secure-random-string'
+import { uid } from 'uid/secure'
+import { v4 as lukeedUuid } from '@lukeed/uuid'
 
 const TRIALS = 7
 const TARGET_MS = 120
@@ -178,12 +182,14 @@ console.log('\n\x1b[1m📊 UUID generators (different tools, different trade-off
 
 // cryptoUuid was measured up front (see above) for a fair, un-depressed native number
 const uuidPkgV4 = benchmark('uuid v4 (npm)', () => uuidV4())
+const lukeedV4Result = benchmark('@lukeed/uuid v4', () => lukeedUuid())
 const nopeUuidV4 = benchmark('nope-id uuid() (v4)', () => uuid())
 const uuidPkgV7 = benchmark('uuid v7 (npm)', () => uuidV7())
 const nopeUuidV7 = benchmark('nope-id uuidv7()', () => uuidv7())
 
 printResult(cryptoUuid)
 printResult(uuidPkgV4)
+printResult(lukeedV4Result)
 printResult(nopeUuidV4)
 printResult(uuidPkgV7)
 printResult(nopeUuidV7)
@@ -206,13 +212,16 @@ printResult(benchmark('nope-id ulid()', () => ulid()))
 printResult(benchmark('ulid package (monotonic)', () => ulidPkgMono()))
 printResult(benchmark('nope-id monotonicFactory', () => nopeMonoGen()))
 
-console.log('\n  \x1b[1mCollision-resistant string IDs:\x1b[0m')
+console.log('\n  \x1b[1mOther random string generators:\x1b[0m')
+printResult(benchmark('uid/secure(21) (hex)', () => uid(21)))
+printResult(benchmark('rndm (Math.random, insecure)', () => rndm(21)))
+printResult(benchmark('secure-random-string', () => srs({ length: 21 })))
 printResult(benchmark('cuid2 createId()', () => cuid2()))
 printResult(benchmark('nope-id nopeid()', () => nopeid()))
 
-console.log('\n  \x1b[2mcuid2 throttles hashing on purpose so collisions/entropy cannot be brute-forced')
-console.log('  in parallel; its own README suggests nanoid/ulid for tight loops. The ulid')
-console.log('  package fetches randomness per character; nope-id pools it.\x1b[0m')
+console.log('\n  \x1b[2muid/secure is fastest but emits 16-char hex (fewer bits per char). Among')
+console.log('  full-alphabet URL-safe generators nope-id leads nanoid. rndm uses Math.random')
+console.log('  (insecure); cuid2 throttles on purpose; the ulid package randomizes per char.\x1b[0m')
 
 // ============================================
 // 6. Batch Generation

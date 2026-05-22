@@ -973,6 +973,25 @@ npm run benchmark
 
 **Result: nope-id wins 5/5 against nanoid** for URL-safe IDs, while providing many extra features and security hardening.
 
+### Where the speed comes from (and where it doesn't)
+
+nope-id is the fastest **JavaScript** library for a specific, very common job: a **cryptographically secure, URL-safe id over a full 64-character alphabet** (the nanoid niche). In that category it beats nanoid, and it also produces UUIDv7 and ULID far faster than the dedicated packages (roughly **6×** the `uuid` package's v7 and **~50×** the `ulid` package).
+
+The speed comes from the engineering, not from cutting corners on randomness:
+
+- **Pooled CSPRNG:** one `crypto` fill covers ~16 ids instead of one syscall per id.
+- **Bitmask + array lookup** per character (no modulo, no per-call allocation).
+- **Precomputed lookup tables** for hex and Crockford, and a tight local-index loop.
+
+Because the win is per-character work, it **widens on a faster CPU**: nope-id is ~3% ahead of nanoid on a shared CI runner and ~19% ahead on an Apple M2, with the same code and Node version.
+
+What nope-id does **not** try to beat:
+
+- **Native `crypto.randomUUID()`:** a C++ built-in, fastest for plain v4, not a JS library.
+- **Smaller-alphabet generators** like `uid` (16-char hex). A 21-char `uid` is ~84 bits; nope-id's 21 chars are ~126 bits. They are faster by packing fewer bits per character, not by generating the same id faster.
+
+So nope-id's goal is to be the fastest **while preserving maximum randomness per character**, in one zero-dependency, dual-module package.
+
 ### UUID generation vs the `uuid` package and native `crypto.randomUUID()`
 
 A benchmark is only meaningful against more than one tool (thanks to nanoid's author for the nudge in [#4](https://github.com/orhanayd/nope-id/issues/4)). Here's the honest picture for UUIDs:
@@ -980,7 +999,8 @@ A benchmark is only meaningful against more than one tool (thanks to nanoid's au
 | Generator | ops/sec | |
 |---|---|---|
 | `crypto.randomUUID()` (Node native, v4) | **~25M** | 🥇 fastest for plain v4 |
-| nope-id `uuid()` (v4) | ~7.8M | edges out the `uuid` package |
+| nope-id `uuid()` (v4) | ~8M | on par with `@lukeed/uuid`, ahead of `uuid` |
+| `@lukeed/uuid` `v4()` | ~8M | optimized pure-JS v4 |
 | `uuid` package `v4()` | ~7.5M | |
 | nope-id `uuidv7()` | ~6.4M | **~6× the `uuid` package's v7** |
 | `uuid` package `v7()` | ~1M | |
@@ -1002,16 +1022,22 @@ nope-id ships a spec-compliant `ulid()` plus an isolated `monotonicFactory()`. S
 
 nope-id is far faster for plain `ulid()` because it draws randomness from a pooled buffer (one fill per 16 IDs), whereas the `ulid` package fetches randomness per character. Decode the timestamp from either with `decodeTime()`. (The `ulid` package is also zero-dependency.)
 
-### cuid2: a different goal
+### Other random string generators
 
-[`@paralleldrive/cuid2`](https://github.com/paralleldrive/cuid2) is **deliberately not fast**. It hashes (SHA-3) several independent entropy sources into **unguessable, horizontally-scalable** IDs, and throttles its speed on purpose, because an ID that hashes too quickly lets an attacker brute-force collisions or entropy in parallel. Its own README points to nanoid or ulid when you need raw performance, which is precisely nope-id's space.
+These all return a random string id; what differs is the alphabet, the security model, and the speed.
 
-| Generator | ops/sec | |
+| Generator | ops/sec | Notes |
 |---|---|---|
-| nope-id `nopeid()` | ~7.5M | CSPRNG random, URL-safe, 0 deps |
-| cuid2 `createId()` | ~7K | hash-based, throttled by design, 3 deps |
+| `uid/secure(21)` | ~10M | crypto, but **16-char hex** (~84 bits in 21 chars) |
+| nope-id `nopeid()` | ~8M | CSPRNG, **64-char URL-safe** (~126 bits in 21 chars) |
+| nanoid | ~6.5M | CSPRNG, 64-char URL-safe |
+| `rndm` | ~3.1M | **`Math.random`, not cryptographically secure** |
+| `secure-random-string` | ~0.7M | crypto-secure, but base64 (not URL-safe by default) |
+| cuid2 `createId()` | ~7K | hash-based, unguessable; throttled on purpose |
 
-So this is not really a head-to-head: if you want cuid2's hardened, sharding-safe guarantees, the cost is intended. nope-id fills the fast, format-rich, zero-dependency niche that cuid2 itself recommends for performance-sensitive code, while still drawing every random bit from a CSPRNG.
+Honest read: nope-id is **not** the single fastest here. `uid/secure` is faster, but it emits 16-char hex, so a 21-char `uid` carries ~84 bits against nope-id's ~126 bits over the same length (for equal entropy, `uid` needs more characters). Among the **full-alphabet, URL-safe** generators (the nanoid family) nope-id is the fastest, and it keeps the densest entropy per character. `rndm` is fast only because it uses `Math.random` (its own README calls it "not cryptographically secure"). cuid2 is intentionally slow for its hardened, sharding-safe model.
+
+So nope-id's aim is not to win every microbenchmark (native `crypto.randomUUID()` and minimal hex tools like `uid` are faster). It is to be the fastest **while preserving maximum randomness per character**, in one zero-dependency package that also covers UUID v4/v7, ULID, Snowflake, ObjectId, Sqids and typed IDs.
 
 ### Extra Features Performance
 
