@@ -1,6 +1,6 @@
 {
 	"name": "nope-id",
-	"version": "1.0.0",
+	"version": "1.1.0",
 	"description": "A tiny, fast, secure, URL-friendly unique string ID generator. ESM & CommonJS. Nanoid alternative with extra features (prefixed IDs, sortable IDs, UUID, distributed IDs).",
 	"type": "module",
 	"main": "index.cjs",
@@ -45,10 +45,13 @@
 	},
 	"scripts": {
 		"test": "node tests/index.js",
-		"test:core": "node --test tests/core.test.js",
-		"test:features": "node --test tests/features.test.js",
-		"test:utils": "node --test tests/utils.test.js",
-		"test:non-secure": "node --test tests/non-secure.test.js",
+		"test:core": "node tests/core.test.js",
+		"test:features": "node tests/features.test.js",
+		"test:utils": "node tests/utils.test.js",
+		"test:non-secure": "node tests/non-secure.test.js",
+		"test:idtypes": "node tests/idtypes.test.js",
+		"test:encoding": "node tests/encoding.test.js",
+		"test:randomness": "node tests/randomness.test.js",
 		"benchmark": "node benchmarks/benchmark.js"
 	},
 	"repository": {
@@ -80,10 +83,11 @@
 		"index.cjs",
 		"index.browser.js",
 		"index.d.ts",
-		"non-secure"
+		"non-secure",
+		"CHANGELOG.txt"
 	],
 	"devDependencies": {
-		"nanoid": "^5.1.6"
+		"nanoid": "^5.1.11"
 	},
 	"maintainers": [
 		{

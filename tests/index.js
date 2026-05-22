@@ -35,6 +35,8 @@ const main = async () => {
   await runSuite('Features Tests', './features.test.js')
   await runSuite('Utils Tests', './utils.test.js')
   await runSuite('Non-Secure Tests', './non-secure.test.js')
+  await runSuite('ID Types Tests', './idtypes.test.js')
+  await runSuite('Encoding Tests', './encoding.test.js')
 
   const duration = ((performance.now() - startTime) / 1000).toFixed(2)
 

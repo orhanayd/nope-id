@@ -101,15 +101,15 @@ describe('collisionProbability()', () => {
 
   test('probabilityForBillion is very small for 21 chars', () => {
     const result = collisionProbability(21)
-    // With clamped totalPossible, probability shows as 1
-    // But the BigInt value proves the space is huge
+    // Computed from the unclamped space: effectively zero for 21 chars
+    assert.ok(result.probabilityForBillion < 1e-4)
     assert.ok(result.totalPossibleBigInt > BigInt('1000000000000000000000000000'))
   })
 
   test('probabilityForBillion increases for shorter IDs', () => {
     const short = collisionProbability(8)
     const long = collisionProbability(21)
-    // Use BigInt comparison for accuracy
+    assert.ok(short.probabilityForBillion > long.probabilityForBillion)
     assert.ok(short.totalPossibleBigInt < long.totalPossibleBigInt)
   })
 
@@ -439,3 +439,8 @@ describe('Integer Overflow Prevention', () => {
 })
 
 export default runTests
+
+// Auto-run when executed directly (e.g. `node tests/utils.test.js`): print summary +
+// exit non-zero on failure. No-op when imported by tests/index.js (that file is argv[1]).
+import { fileURLToPath } from 'node:url'
+if (process.argv[1] === fileURLToPath(import.meta.url)) runTests()

@@ -4,16 +4,17 @@ A tiny, secure, URL-friendly unique string ID generator for JavaScript.
 
 **A faster, more secure alternative to nanoid with extra features!**
 
-- **Faster** - Up to 18% faster than nanoid, wins 5/5 benchmarks ([see benchmarks](#performance))
+- **Faster** - Up to ~20% faster than nanoid; wins all 5 core benchmarks ([see benchmarks](#performance))
 - **Security Hardened** - Timing attack prevention, modulo bias elimination, prototype pollution protection ([see security](#security))
-- **Well Tested** - 244 tests including security & entropy tests ([see testing](#testing))
+- **Well Tested** - 307 tests including security & entropy tests ([see testing](#testing))
 - **Cryptographically Secure** - Uses `webcrypto.getRandomValues()` (CSPRNG)
 - **Zero Dependencies** - No external dependencies
 - **URL-safe** - Uses `A-Za-z0-9_-` characters
 - **Dual Module** - Works with both ESM (`import`) and CommonJS (`require`)
 - **TypeScript** - Full type definitions included
 - **Collision-resistant** - Monotonic sortable IDs, distributed-safe IDs
-- **Extra Features** - Prefixed IDs, sortable IDs, UUID v4, and more!
+- **Many ID Formats** - UUID v4 & **v7**, **ULID** (spec-compliant + monotonic factory), **Snowflake**, **MongoDB ObjectId**
+- **Extra Features** - Prefixed IDs, sortable IDs, **Sqids** (reversible encoding), **typed IDs**, format validators, and more!
 
 ## Installation
 
@@ -179,6 +180,7 @@ Generates a ULID-like sortable ID with monotonic guarantee. Uses Crockford's Bas
 - Chronologically sortable (lexicographic order)
 - Same-millisecond IDs are guaranteed monotonically increasing
 - Can decode timestamp with `decodeTime()`
+- Sizes > 22 are padded with extra Crockford Base32 random chars; sizes < 22 truncate to the timestamp prefix (use size ≥ 22 to keep the monotonic guarantee)
 
 ```javascript
 // ES Modules
@@ -447,10 +449,11 @@ import { collisionProbability } from 'nope-id'
 const info = collisionProbability(21)
 console.log(info)
 // {
-//   totalPossible: 4.7e+37,        // Total unique IDs possible
-//   probabilityForBillion: 1.06e-20, // Collision chance for 1B IDs
-//   safeCount: 8.1e+18,            // Safe number of IDs (50% collision)
-//   yearsFor1Percent: 1.5e+12      // Years at 1 ID/ms for 1% collision
+//   totalPossible: 9007199254740991,   // clamped to MAX_SAFE_INTEGER (use totalPossibleBigInt for exact)
+//   totalPossibleBigInt: 85070591730234615865843651857942052864n, // 64^21 ≈ 8.5e37
+//   probabilityForBillion: 0,          // ~5.9e-21, rounds to 0 in double precision
+//   safeCount: 1.086e+19,              // ~50% collision after generating this many IDs
+//   yearsFor1Percent: 4.133e+7         // years at 1 ID/ms before 1% collision
 // }
 
 // Compare different lengths
@@ -504,6 +507,103 @@ safeGen() // Very readable code
 const { alphabets, customAlphabet } = require('nope-id')
 const gen = customAlphabet(alphabets.hexLower, 16)
 ```
+
+---
+
+## Additional ID Formats & Helpers
+
+These secure-only generators and helpers are exposed as tree-shakeable named exports and **never touch the hot path** of `nopeid()` — import only what you use.
+
+### `uuidv7()`
+
+Time-ordered UUID (RFC 9562) — database-index friendly and sortable by creation time. The first 48 bits encode the Unix-ms timestamp.
+
+```javascript
+import { uuidv7, isValidUUID } from 'nope-id'
+
+uuidv7()                  // "0192f3c1-8e2a-7b3c-9d4e-5f60718293a4"
+isValidUUID(uuidv7(), 7)  // true
+```
+
+### `ulid(seedTime?)` & `monotonicFactory()`
+
+Spec-compliant 26-char ULID (Crockford Base32: 10 timestamp + 16 random). `ulid()` uses fresh randomness per call; `monotonicFactory()` returns a generator with **isolated** state that guarantees strictly increasing IDs within the same millisecond (without touching the global `sortableId()` state).
+
+```javascript
+import { ulid, monotonicFactory, decodeTime } from 'nope-id'
+
+ulid()              // "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+decodeTime(ulid())  // Date
+
+const next = monotonicFactory()
+next() < next()     // true (same ms, strictly increasing)
+```
+
+### `snowflakeFactory(options)`, `snowflake()` & `decodeSnowflake(id)`
+
+Twitter-style 64-bit distributed IDs returned as **strings** (BigInt-safe). Layout: 41-bit timestamp · 10-bit node id · 12-bit sequence. Each factory owns its own sequence state (coordination-free per node).
+
+```javascript
+import { snowflakeFactory, decodeSnowflake, snowflake } from 'nope-id'
+
+const next = snowflakeFactory({ nodeId: 1 })  // optional: { epoch }
+const id = next()                              // "1838219834728448001"
+decodeSnowflake(id)  // { timestamp: Date, nodeId: 1, sequence: 0 }
+
+snowflake()  // default single-node generator (node id derived from fingerprint)
+```
+
+### `objectId()` & `decodeObjectIdTime(id)`
+
+MongoDB ObjectId-compatible 24-char hex (4-byte timestamp + 5-byte per-process value + 3-byte counter).
+
+```javascript
+import { objectId, decodeObjectIdTime } from 'nope-id'
+
+objectId()                      // "65f1c3e2a1b2c3d4e5f60718"
+decodeObjectIdTime(objectId())  // Date
+```
+
+### `sqidsFactory(options)` — reversible integer encoding
+
+Encode arrays of non-negative integers into short, URL-safe, **reversible** strings — e.g. to hide sequential database IDs in URLs. This is obfuscation, **not** encryption.
+
+```javascript
+import { sqidsFactory } from 'nope-id'
+
+const sqids = sqidsFactory()        // { alphabet?, minLength?, blocklist? }
+const id = sqids.encode([1, 2, 3])  // "86Rf07"
+sqids.decode(id)                    // [1, 2, 3]
+```
+
+> The default has **no** profanity blocklist (to stay tiny). Pass your own `blocklist` if you need one.
+
+### `defineId(prefix, options?)` — typed prefixed IDs
+
+Stripe-style typed IDs with a generator, a type guard, and a parser. In TypeScript the generated id is typed as `` `${prefix}_${string}` ``.
+
+```typescript
+import { defineId } from 'nope-id'
+
+const UserId = defineId('user')   // { size?, separator?, alphabet? }
+const id = UserId.generate()      // type: `user_${string}`
+UserId.is(id)                     // true (type guard narrows the type)
+UserId.parse('user_abc')          // { prefix: 'user', id: 'abc' }  (or null)
+```
+
+### `isValidUUID(id, version?)` & `isValidULID(id)`
+
+Format validators for UUID and ULID strings.
+
+```javascript
+import { isValidUUID, isValidULID } from 'nope-id'
+
+isValidUUID('110ec58a-a0f2-4ac4-8393-c866d813b8d1')  // true
+isValidUUID(uuidv7(), 7)                              // true (version-pinned)
+isValidULID('01ARZ3NDEKTSV4RRFFQ69G5FAV')             // true
+```
+
+> These formats use cryptographic randomness and are **secure-version only** — they are not part of `nope-id/non-secure`.
 
 ---
 
@@ -696,6 +796,14 @@ app.post('/legacy-api', (req, res) => {
 | Distributed IDs | ✅ | ❌ |
 | Process fingerprint | ✅ | ❌ |
 | UUID v4 | ✅ | ❌ |
+| UUID v7 (time-ordered) | ✅ | ❌ |
+| ULID (spec-compliant) | ✅ | ❌ |
+| Monotonic ULID factory | ✅ | ❌ |
+| Snowflake IDs | ✅ | ❌ |
+| MongoDB ObjectId | ✅ | ❌ |
+| Sqids (reversible encoding) | ✅ | ❌ |
+| Typed IDs (TS template types) | ✅ | ❌ |
+| Format validators (UUID/ULID) | ✅ | ❌ |
 | Slug IDs | ✅ | ❌ |
 | Short IDs (no lookalikes) | ✅ | ❌ |
 | Batch generation | ✅ | ❌ |
@@ -751,7 +859,7 @@ nope-id is designed with security as a top priority. We've implemented multiple 
 
 ## Testing
 
-nope-id has comprehensive test coverage with **244 tests** across 4 test suites, including security-specific tests.
+nope-id has comprehensive test coverage with **307 tests** across 6 test suites, including security-specific tests.
 
 ### Run Tests
 
@@ -764,6 +872,8 @@ npm run test:core        # Core functions (nopeid, customAlphabet, random)
 npm run test:features    # Features (prefixedId, sortableId, uuid, etc.)
 npm run test:utils       # Utilities (isValid, collisionProbability)
 npm run test:non-secure  # Non-secure version tests
+npm run test:idtypes     # New ID types (uuidv7, ulid, snowflake, objectId)
+npm run test:encoding    # Sqids, typed IDs, format validators
 ```
 
 ### Test Coverage
@@ -774,7 +884,9 @@ npm run test:non-secure  # Non-secure version tests
 | **Features** | 78 | prefixedId, sortableId, uuid, slugId, shortId, distributedId |
 | **Utils** | 56 | isValid, collisionProbability, security tests |
 | **Non-Secure** | 29 | Math.random() based version |
-| **Total** | **244** | All tests passing |
+| **ID Types** | 31 | uuidv7, ulid, monotonicFactory, snowflake, objectId |
+| **Encoding** | 32 | sqids, defineId, isValidUUID, isValidULID |
+| **Total** | **307** | All tests passing |
 
 ### Security Tests
 
@@ -818,13 +930,30 @@ We have dedicated security tests that verify our hardening measures:
   ✅ alternating between different generators
 ```
 
+### Randomness Comparison Test (vs nanoid)
+
+We have a dedicated randomness comparison test against nanoid:
+
+```bash
+npm run test:randomness
+```
+
+| Test | nope-id | nanoid |
+|------|---------|--------|
+| Chi-Square Distribution | ✅ χ²=56.12 | ✅ χ²=49.75 |
+| Uniqueness (100K IDs) | ✅ 0 duplicates | ✅ 0 duplicates |
+| Bit Distribution | ✅ 50.06/49.94% | ✅ 49.88/50.12% |
+| Sequential Correlation | ✅ 0.319 avg | ✅ 0.329 avg |
+| Alphabet Coverage | ✅ 64/64 (100%) | ✅ 64/64 (100%) |
+| Modulo Bias (3-char) | ✅ 0.47% deviation | ✅ 0.94% deviation |
+
 ---
 
 ## Performance
 
 ### nope-id vs nanoid Benchmark
 
-**nope-id is faster than nanoid in every benchmark!**
+**nope-id wins all 5 core benchmarks vs nanoid 5.1.11** — and ships many extra ID formats and security hardening on top.
 
 Run the benchmark yourself:
 
@@ -832,15 +961,15 @@ Run the benchmark yourself:
 npm run benchmark
 ```
 
-**Results (Node.js v20+, 100,000 iterations):**
+**Results (Node.js 20+, nanoid 5.1.11, 100k iterations × best of 5, with a global warmup for fairness — absolute numbers vary by machine):**
 
-| Test | nanoid | nope-id | Winner |
+| Test | nanoid 5.1.11 | nope-id | Winner |
 |------|--------|---------|--------|
-| Basic (21 chars) | 5.5M ops/sec | **5.7M ops/sec** | **nope-id +4%** |
-| Small (10 chars) | 10.7M ops/sec | **11.8M ops/sec** | **nope-id +11%** |
-| Large (64 chars) | 2.2M ops/sec | **2.6M ops/sec** | **nope-id +18%** |
-| Custom Alphabet | 5.2M ops/sec | **5.8M ops/sec** | **nope-id +11%** |
-| Batch (100 IDs) | 62K ops/sec | **70K ops/sec** | **nope-id +12%** |
+| Basic (21 chars) | ~6.6M ops/sec | **~7.8M ops/sec** | **nope-id ~+18%** |
+| Small (10 chars) | ~13.2M ops/sec | **~14.4M ops/sec** | **nope-id ~+9%** |
+| Large (64 chars) | ~2.65M ops/sec | **~3.1M ops/sec** | **nope-id ~+17%** |
+| Custom Alphabet | ~7.45M ops/sec | **~8.9M ops/sec** | **nope-id ~+20%** |
+| Batch (100 IDs) | ~72K ops/sec | **~83K ops/sec** | **nope-id ~+15%** |
 
 **Result: nope-id wins 5/5 benchmarks** while providing many extra features and security hardening!
 
@@ -850,11 +979,17 @@ These features are exclusive to nope-id (nanoid doesn't have them):
 
 | Feature | Performance |
 |---------|-------------|
-| `sortableId()` | ~4.2M ops/sec |
-| `prefixedId()` | ~6.6M ops/sec |
-| `uuid()` | ~5.1M ops/sec |
-| `slugId()` | ~4.2M ops/sec |
-| `shortId()` | ~6.9M ops/sec |
+| `sortableId()` | ~5M ops/sec |
+| `prefixedId()` | ~7.2M ops/sec |
+| `uuid()` | ~7.9M ops/sec |
+| `slugId()` | ~5.6M ops/sec |
+| `shortId()` | ~11.9M ops/sec |
+| `uuidv7()` | ~6.4M ops/sec |
+| `ulid()` | ~3M ops/sec |
+| `monotonicFactory()` | ~3.2M ops/sec |
+| `snowflake` (factory) | ~4.1M ops/sec |
+| `objectId()` | ~9.1M ops/sec |
+| `sqids.encode()` | ~0.32M ops/sec |
 
 ### Why nope-id is Fast
 
@@ -863,6 +998,8 @@ These features are exclusive to nope-id (nanoid doesn't have them):
 - **Optimized Pool Management**: Pre-allocates 128x buffer size to minimize crypto API calls
 - **Bitwise Operations**: Uses `& mask` for fast alphabet index mapping
 - **Pre-cached Generators**: Common functions like `slugId()` and `shortId()` use cached generators
+- **Precomputed Hex & Crockford Tables**: `uuid()`/`uuidv7()`/`objectId()`/`ulid()` format via byte→hex and char-code tables instead of per-byte conversion
+- **Allocation-free `customAlphabet`**: reads the shared byte pool directly (no per-call view allocation), which also speeds up `slugId()` and `shortId()`
 - **Zero Dependencies**: No external library overhead
 
 ---
