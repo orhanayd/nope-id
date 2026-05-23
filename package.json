@@ -1,6 +1,6 @@
 {
 	"name": "nope-id",
-	"version": "1.1.0",
+	"version": "1.2.0",
 	"description": "A tiny, fast, secure, URL-friendly unique string ID generator. ESM & CommonJS. Nanoid alternative with extra features (prefixed IDs, sortable IDs, UUID, distributed IDs).",
 	"type": "module",
 	"main": "index.cjs",
@@ -52,7 +52,12 @@
 		"test:idtypes": "node tests/idtypes.test.js",
 		"test:encoding": "node tests/encoding.test.js",
 		"test:randomness": "node tests/randomness.test.js",
-		"benchmark": "node benchmarks/benchmark.js"
+		"test:types": "tsc --noEmit --strict --target es2022 --module nodenext --moduleResolution nodenext --allowImportingTsExtensions false tests/types.test.ts",
+		"test:browser": "node tests/browser.test.js",
+		"test:all": "npm test && npm run test:randomness && npm run test:types && npm run test:browser",
+		"benchmark": "node benchmarks/benchmark.js",
+		"benchmark:json": "node benchmarks/benchmark.js --json",
+		"benchmark:update-readme": "node benchmarks/benchmark.js --json > bench.json && node scripts/update-readme.js bench.json && rm bench.json"
 	},
 	"repository": {
 		"type": "git",
@@ -92,6 +97,7 @@
 		"nanoid": "^5.1.11",
 		"rndm": "^1.2.0",
 		"secure-random-string": "^1.1.4",
+		"typescript": "^5.9.3",
 		"uid": "^2.0.2",
 		"ulid": "^3.0.2",
 		"uuid": "^14.0.0"
