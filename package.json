@@ -87,7 +87,14 @@
 		"CHANGELOG.txt"
 	],
 	"devDependencies": {
-		"nanoid": "^5.1.11"
+		"@lukeed/uuid": "^2.0.1",
+		"@paralleldrive/cuid2": "^3.3.0",
+		"nanoid": "^5.1.11",
+		"rndm": "^1.2.0",
+		"secure-random-string": "^1.1.4",
+		"uid": "^2.0.2",
+		"ulid": "^3.0.2",
+		"uuid": "^14.0.0"
 	},
 	"maintainers": [
 		{

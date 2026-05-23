@@ -18,25 +18,42 @@ import {
   objectId,
   sqidsFactory,
 } from '../index.js'
+import { randomUUID } from 'node:crypto'
+import { v4 as uuidV4, v7 as uuidV7 } from 'uuid'
+import { ulid as ulidPkg, monotonicFactory as ulidMonoFactory } from 'ulid'
+import { createId as cuid2 } from '@paralleldrive/cuid2'
+import rndm from 'rndm'
+import srs from 'secure-random-string'
+import { uid } from 'uid/secure'
+import { v4 as lukeedUuid } from '@lukeed/uuid'
 
-const ITERATIONS = 100000
-const WARMUP = 20000
-const TRIALS = 5
+const TRIALS = 7
+const TARGET_MS = 120
 
-// Benchmark utility: warm up, then take the fastest of several trials. Best-of-N
-// reflects warm steady-state throughput and removes single-shot noise (GC, scheduling).
-const benchmark = (name, fn, iterations = ITERATIONS) => {
-  for (let i = 0; i < WARMUP; i++) fn()
+// Best-of-N timing with auto-calibrated iteration counts. A fixed iteration count
+// under-reports very fast functions (e.g. native crypto.randomUUID() at ~20M+ ops/sec
+// gets too short a measurement window); calibrating each function to a ~120ms window
+// keeps fast and slow tools alike accurate. The calibration loop also serves as warmup.
+const benchmark = (name, fn) => {
+  let calIters = 2000
+  let calMs = 0
+  while (calMs < 5) {
+    const start = performance.now()
+    for (let i = 0; i < calIters; i++) fn()
+    calMs = performance.now() - start
+    if (calMs < 5) calIters *= 4
+  }
+  const iters = Math.max(2000, Math.ceil((calIters / calMs) * TARGET_MS))
 
   let opsPerSec = 0
   for (let t = 0; t < TRIALS; t++) {
     const start = performance.now()
-    for (let i = 0; i < iterations; i++) fn()
-    const ops = Math.round((iterations / (performance.now() - start)) * 1000)
-    if (ops > opsPerSec) opsPerSec = ops
+    for (let i = 0; i < iters; i++) fn()
+    const rate = Math.round((iters / (performance.now() - start)) * 1000)
+    if (rate > opsPerSec) opsPerSec = rate
   }
 
-  return { name, iterations, opsPerSec }
+  return { name, opsPerSec }
 }
 
 // Format number with commas
@@ -64,10 +81,16 @@ const printResult = (result, baseline = null) => {
 console.log('\n' + '═'.repeat(70))
 console.log('  nope-id vs nanoid - Performance Benchmark')
 console.log('═'.repeat(70))
-console.log(`  Iterations: ${formatNumber(ITERATIONS)} | Warmup: ${formatNumber(WARMUP)} | Best of ${TRIALS} trials`)
+console.log(`  Auto-calibrated ~${TARGET_MS}ms/trial | Best of ${TRIALS} trials | numbers vary by machine`)
 console.log('─'.repeat(70))
 
-// Global warmup so the CPU/JIT is hot before the first timed comparison — otherwise
+// Measure native crypto.randomUUID() FIRST. Its throughput drops sharply once other
+// CSPRNG-backed generators run in the same process (shared entropy path), so measuring
+// it up front gives it a fair, un-depressed number, since we don't want to flatter ourselves
+// by under-reporting the fastest tool. (Suggested in issue #4 by nanoid's author.)
+const cryptoUuid = benchmark('crypto.randomUUID() (native v4)', () => randomUUID())
+
+// Global warmup so the CPU/JIT is hot before the first timed comparison, since otherwise
 // whichever library is measured first is unfairly penalized by a cold start.
 for (let i = 0; i < 500000; i++) { nanoid(); nopeid() }
 
@@ -152,21 +175,66 @@ printResult(benchmark('objectId()', () => objectId()))
 printResult(benchmark('sqids encode [1,2,3]', () => sqidsGen.encode([1, 2, 3])))
 
 // ============================================
+// 5c. UUID generators vs the `uuid` package and native crypto.randomUUID()
+// (suggested by nanoid's author in issue #4; a fair benchmark needs more tools)
+// ============================================
+console.log('\n\x1b[1m📊 UUID generators (different tools, different trade-offs)\x1b[0m\n')
+
+// cryptoUuid was measured up front (see above) for a fair, un-depressed native number
+const uuidPkgV4 = benchmark('uuid v4 (npm)', () => uuidV4())
+const lukeedV4Result = benchmark('@lukeed/uuid v4', () => lukeedUuid())
+const nopeUuidV4 = benchmark('nope-id uuid() (v4)', () => uuid())
+const uuidPkgV7 = benchmark('uuid v7 (npm)', () => uuidV7())
+const nopeUuidV7 = benchmark('nope-id uuidv7()', () => uuidv7())
+
+printResult(cryptoUuid)
+printResult(uuidPkgV4)
+printResult(lukeedV4Result)
+printResult(nopeUuidV4)
+printResult(uuidPkgV7)
+printResult(nopeUuidV7)
+
+console.log('\n  \x1b[2mNative crypto.randomUUID() is the fastest for plain v4 UUIDs. If that is all')
+console.log('  you need, use it. nope-id leads the uuid npm package (especially v7) and adds')
+console.log('  many formats (ULID, Snowflake, ObjectId, Sqids, typed IDs) those do not offer.\x1b[0m')
+
+// ============================================
+// 5d. vs other ID libraries (same format / same purpose)
+// ============================================
+console.log('\n\x1b[1m📊 vs other ID libraries\x1b[0m\n')
+
+const ulidPkgMono = ulidMonoFactory()
+const nopeMonoGen = monotonicFactory()
+
+console.log('  \x1b[1mULID (26-char Crockford, sortable; identical format):\x1b[0m')
+printResult(benchmark('ulid package', () => ulidPkg()))
+printResult(benchmark('nope-id ulid()', () => ulid()))
+printResult(benchmark('ulid package (monotonic)', () => ulidPkgMono()))
+printResult(benchmark('nope-id monotonicFactory', () => nopeMonoGen()))
+
+console.log('\n  \x1b[1mOther random string generators:\x1b[0m')
+printResult(benchmark('uid/secure(21) (hex)', () => uid(21)))
+printResult(benchmark('rndm (Math.random, insecure)', () => rndm(21)))
+printResult(benchmark('secure-random-string', () => srs({ length: 21 })))
+printResult(benchmark('cuid2 createId()', () => cuid2()))
+printResult(benchmark('nope-id nopeid()', () => nopeid()))
+
+console.log('\n  \x1b[2muid/secure is fastest but emits 16-char hex (fewer bits per char). Among')
+console.log('  full-alphabet URL-safe generators nope-id leads nanoid. rndm uses Math.random')
+console.log('  (insecure); cuid2 throttles on purpose; the ulid package randomizes per char.\x1b[0m')
+
+// ============================================
 // 6. Batch Generation
 // ============================================
 console.log('\n\x1b[1m📊 Batch Generation (100 IDs)\x1b[0m\n')
 
-const nanoidBatch = benchmark(
-  'nanoid x100 (loop)',
-  () => {
-    const ids = []
-    for (let i = 0; i < 100; i++) ids.push(nanoid())
-    return ids
-  },
-  ITERATIONS / 100
-)
+const nanoidBatch = benchmark('nanoid x100 (loop)', () => {
+  const ids = []
+  for (let i = 0; i < 100; i++) ids.push(nanoid())
+  return ids
+})
 
-const nopeidBatch = benchmark('generateMany(100)', () => generateMany(100), ITERATIONS / 100)
+const nopeidBatch = benchmark('generateMany(100)', () => generateMany(100))
 
 printResult(nanoidBatch)
 printResult(nopeidBatch, nanoidBatch)

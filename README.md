@@ -512,11 +512,11 @@ const gen = customAlphabet(alphabets.hexLower, 16)
 
 ## Additional ID Formats & Helpers
 
-These secure-only generators and helpers are exposed as tree-shakeable named exports and **never touch the hot path** of `nopeid()` — import only what you use.
+These secure-only generators and helpers are exposed as tree-shakeable named exports and **never touch the hot path** of `nopeid()`; import only what you use.
 
 ### `uuidv7()`
 
-Time-ordered UUID (RFC 9562) — database-index friendly and sortable by creation time. The first 48 bits encode the Unix-ms timestamp.
+Time-ordered UUID (RFC 9562), database-index friendly and sortable by creation time. The first 48 bits encode the Unix-ms timestamp.
 
 ```javascript
 import { uuidv7, isValidUUID } from 'nope-id'
@@ -564,9 +564,9 @@ objectId()                      // "65f1c3e2a1b2c3d4e5f60718"
 decodeObjectIdTime(objectId())  // Date
 ```
 
-### `sqidsFactory(options)` — reversible integer encoding
+### `sqidsFactory(options)`: reversible integer encoding
 
-Encode arrays of non-negative integers into short, URL-safe, **reversible** strings — e.g. to hide sequential database IDs in URLs. This is obfuscation, **not** encryption.
+Encode arrays of non-negative integers into short, URL-safe, **reversible** strings, for example to hide sequential database IDs in URLs. This is obfuscation, **not** encryption.
 
 ```javascript
 import { sqidsFactory } from 'nope-id'
@@ -578,7 +578,7 @@ sqids.decode(id)                    // [1, 2, 3]
 
 > The default has **no** profanity blocklist (to stay tiny). Pass your own `blocklist` if you need one.
 
-### `defineId(prefix, options?)` — typed prefixed IDs
+### `defineId(prefix, options?)`: typed prefixed IDs
 
 Stripe-style typed IDs with a generator, a type guard, and a parser. In TypeScript the generated id is typed as `` `${prefix}_${string}` ``.
 
@@ -603,7 +603,7 @@ isValidUUID(uuidv7(), 7)                              // true (version-pinned)
 isValidULID('01ARZ3NDEKTSV4RRFFQ69G5FAV')             // true
 ```
 
-> These formats use cryptographic randomness and are **secure-version only** — they are not part of `nope-id/non-secure`.
+> These formats use cryptographic randomness and are **secure-version only**; they are not part of `nope-id/non-secure`.
 
 ---
 
@@ -953,7 +953,7 @@ npm run test:randomness
 
 ### nope-id vs nanoid Benchmark
 
-**nope-id wins all 5 core benchmarks vs nanoid 5.1.11** — and ships many extra ID formats and security hardening on top.
+**nope-id wins all 5 core benchmarks vs nanoid 5.1.11**, and ships many extra ID formats and security hardening on top.
 
 Run the benchmark yourself:
 
@@ -961,17 +961,89 @@ Run the benchmark yourself:
 npm run benchmark
 ```
 
-**Results (Node.js 20+, nanoid 5.1.11, 100k iterations × best of 5, with a global warmup for fairness — absolute numbers vary by machine):**
+**Results (Node.js 20+, nanoid 5.1.11, auto-calibrated ~120 ms × best of 7 trials, with a global warmup for fairness; absolute numbers vary by machine):**
 
 | Test | nanoid 5.1.11 | nope-id | Winner |
 |------|--------|---------|--------|
-| Basic (21 chars) | ~6.6M ops/sec | **~7.8M ops/sec** | **nope-id ~+18%** |
-| Small (10 chars) | ~13.2M ops/sec | **~14.4M ops/sec** | **nope-id ~+9%** |
-| Large (64 chars) | ~2.65M ops/sec | **~3.1M ops/sec** | **nope-id ~+17%** |
-| Custom Alphabet | ~7.45M ops/sec | **~8.9M ops/sec** | **nope-id ~+20%** |
-| Batch (100 IDs) | ~72K ops/sec | **~83K ops/sec** | **nope-id ~+15%** |
+| Basic (21 chars) | ~6.6M ops/sec | **~7.45M ops/sec** | **nope-id ~+13%** |
+| Small (10 chars) | ~12.6M ops/sec | **~13.8M ops/sec** | **nope-id ~+9%** |
+| Large (64 chars) | ~2.65M ops/sec | **~3.15M ops/sec** | **nope-id ~+18%** |
+| Custom Alphabet | ~7.35M ops/sec | **~8.9M ops/sec** | **nope-id ~+21%** |
+| Batch (100 IDs) | ~70K ops/sec | **~80K ops/sec** | **nope-id ~+15%** |
 
-**Result: nope-id wins 5/5 benchmarks** while providing many extra features and security hardening!
+**Result: nope-id wins 5/5 against nanoid** for URL-safe IDs, while providing many extra features and security hardening.
+
+### Where the speed comes from (and where it doesn't)
+
+nope-id is the fastest **JavaScript** library for a specific, very common job: a **cryptographically secure, URL-safe id over a full 64-character alphabet** (the nanoid niche). In that category it beats nanoid, and it also produces UUIDv7 and ULID far faster than the dedicated packages (roughly **6×** the `uuid` package's v7 and **~50×** the `ulid` package).
+
+The speed comes from the engineering, not from cutting corners on randomness:
+
+- **Pooled CSPRNG:** one `crypto` fill covers ~16 ids instead of one syscall per id.
+- **Bitmask + array lookup** per character (no modulo, no per-call allocation).
+- **Precomputed lookup tables** for hex and Crockford, and a tight local-index loop.
+
+Because the win is per-character work, it **widens on a faster CPU**: nope-id is ~3% ahead of nanoid on a shared CI runner and ~19% ahead on an Apple M2, with the same code and Node version.
+
+What nope-id does **not** try to beat:
+
+- **Native `crypto.randomUUID()`:** a C++ built-in, fastest for plain v4, not a JS library.
+- **Smaller-alphabet generators** like `uid` (16-char hex). A 21-char `uid` is ~84 bits; nope-id's 21 chars are ~126 bits. They are faster by packing fewer bits per character, not by generating the same id faster.
+
+So nope-id's goal is to be the fastest **while preserving maximum randomness per character**, in one zero-dependency, dual-module package.
+
+### UUID generation vs the `uuid` package and native `crypto.randomUUID()`
+
+A benchmark is only meaningful against more than one tool (thanks to nanoid's author for the nudge in [#4](https://github.com/orhanayd/nope-id/issues/4)). Here's the honest picture for UUIDs:
+
+| Generator | ops/sec | |
+|---|---|---|
+| `crypto.randomUUID()` (Node native, v4) | **~25M** | 🥇 fastest for plain v4 |
+| nope-id `uuid()` (v4) | ~8M | on par with `@lukeed/uuid`, ahead of `uuid` |
+| `@lukeed/uuid` `v4()` | ~8M | optimized pure-JS v4 |
+| `uuid` package `v4()` | ~7.5M | |
+| nope-id `uuidv7()` | ~6.4M | **~6× the `uuid` package's v7** |
+| `uuid` package `v7()` | ~1M | |
+
+**Honest take:** if all you need is a random v4 UUID, **Node's built-in `crypto.randomUUID()` is by far the fastest, so use it.** nope-id doesn't try to beat native there. Its value is **breadth**: UUIDv7, ULID, Snowflake, ObjectId, Sqids, typed IDs and nanoid-style short IDs (most of which the `uuid` package and native don't offer), plus being faster than nanoid for URL-safe IDs and faster than the `uuid` package (especially v7), all dual-module and zero-dependency.
+
+### ULID (sortable) vs the `ulid` package
+
+ULIDs are an attractive alternative to UUIDs: **lexicographically sortable**, a compact **26 characters** (vs UUID's 36), Crockford base32 (URL-safe, case-insensitive), 128-bit and UUID-compatible, with a monotonic option that handles the same millisecond correctly. Unlike random UUID v4, their time prefix keeps database indexes from fragmenting.
+
+nope-id ships a spec-compliant `ulid()` plus an isolated `monotonicFactory()`. Same 26-char format as the `ulid` package, both crypto-backed:
+
+| Generator | ops/sec |
+|---|---|
+| nope-id `ulid()` | **~2.9M** |
+| `ulid` package | ~55K |
+| nope-id `monotonicFactory()` | **~3.1M** |
+| `ulid` package (monotonic) | ~2.2M |
+
+nope-id is far faster for plain `ulid()` because it draws randomness from a pooled buffer (one fill per 16 IDs), whereas the `ulid` package fetches randomness per character. Decode the timestamp from either with `decodeTime()`. (The `ulid` package is also zero-dependency.)
+
+### Speed vs entropy: where each library lands
+
+Two things matter for an id generator: **speed** and **entropy**, the amount of real randomness each id carries (its security against being guessed). These are all good libraries; the table shows the trade-off each one makes, measured at 21 characters where the length is configurable:
+
+| Generator | ops/sec | entropy / id | randomness source |
+|---|---|---|---|
+| `uid/secure` | ~10M | ~84 bits (16-char hex) | CSPRNG |
+| **nope-id `nopeid()`** | **~8M** | **~126 bits (64-char URL-safe)** | **CSPRNG** |
+| nanoid | ~6.5M | ~126 bits (64-char URL-safe) | CSPRNG |
+| `rndm` | ~3.1M | ~125 bits, but predictable | `Math.random` (not secure) |
+| `secure-random-string` | ~0.7M | ~126 bits (base64, not URL-safe) | CSPRNG |
+| cuid2 `createId()` | ~7K | 24-char, hash-derived | CSPRNG + SHA-3 |
+
+Read as two axes, **speed** and **security**, every other library gives something up on one of them:
+
+- **`uid/secure`** wins on raw speed, but pays with a smaller alphabet: ~84 bits per 21-char id against nope-id's ~126. For equal security you would have to make `uid` longer.
+- **`rndm`** is fast too, but it is built on `Math.random`, so its bits are predictable; its own README calls it "not cryptographically secure."
+- **`secure-random-string`** matches nope-id's entropy but is roughly 10x slower and emits base64 (not URL-safe).
+- **cuid2** spends speed on purpose for a hardened, sharding-safe, hash-based model.
+- **nanoid** matches nope-id's entropy exactly (same 64-char alphabet); nope-id is simply the faster of the two.
+
+nope-id is the one row that has **all three at once**: maximum entropy per character (126 bits), a real CSPRNG, and top-tier speed. That is the whole design goal, fast without ever spending randomness to get there. (For a plain v4 UUID, native `crypto.randomUUID()` is still faster at 122 bits in C++, so use it when a UUID is all you need.)
 
 ### Extra Features Performance
 
