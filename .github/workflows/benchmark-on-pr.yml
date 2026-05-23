@@ -33,7 +33,11 @@ jobs:
           node-version: 26
 
       - name: Install dependencies
-        run: npm ci
+        # The repo intentionally gitignores package-lock.json (see .gitignore),
+        # so `npm ci` cannot run here. `npm install` resolves devDeps against the
+        # ^-ranges in package.json. devDeps are only used for benchmarking against
+        # other libraries; they are not shipped to consumers.
+        run: npm install --no-audit --no-fund
 
       # Gate the benchmark on a full green test run. If anything below fails,
       # the workflow stops before the benchmark step, so the README is never
