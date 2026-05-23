@@ -6,6 +6,10 @@
 const urlAlphabet =
   'useandom-26T198340PX75pxJACKVERYMINDBUSHWOLF_GQZbfghjklqvwyzrict'
 
+// Single Set for the default urlAlphabet. isValid() reuses this when the caller
+// passes no custom alphabet, instead of building a fresh 64-element Set per call.
+const URL_ALPHABET_SET = new Set(urlAlphabet)
+
 const alphabets = {
   alphanumeric: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz',
   lowercase: 'abcdefghijklmnopqrstuvwxyz',
@@ -25,6 +29,10 @@ const alphabets = {
 
 const CROCKFORD_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
 
+// Pre-computed char codes of the URL-safe alphabet, indexed by (rand & 63).
+// Powers the single-allocation String.fromCharCode path in nopeid() below.
+const URL_ALPHABET_CODES = /* @__PURE__ */ Uint8Array.from(urlAlphabet, c => c.charCodeAt(0))
+
 const customAlphabet = (alphabet, defaultSize = 21) => {
   if (!alphabet || alphabet.length === 0) {
     throw new Error('Alphabet cannot be empty')
@@ -41,13 +49,17 @@ const customAlphabet = (alphabet, defaultSize = 21) => {
   }
 }
 
+// Builds char codes in a Uint8Array first, then converts to a string via
+// String.fromCharCode.apply, so V8 allocates the result once instead of producing
+// ~21 ConsString allocations from per-character concatenation.
 const nopeid = (size = 21) => {
-  let id = ''
-  let i = size | 0
-  while (i--) {
-    id += urlAlphabet[(Math.random() * 64) | 0]
+  size |= 0
+  if (size <= 0) return ''
+  const codes = new Uint8Array(size)
+  for (let i = 0; i < size; i++) {
+    codes[i] = URL_ALPHABET_CODES[(Math.random() * 64) | 0]
   }
-  return id
+  return String.fromCharCode.apply(null, codes)
 }
 
 // Monotonic state
@@ -127,7 +139,7 @@ const generateMany = (count, size = 21) => {
 const isValid = (id, alphabet = urlAlphabet) => {
   if (typeof id !== 'string' || id.length === 0) return false
 
-  const charSet = new Set(alphabet)
+  const charSet = alphabet === urlAlphabet ? URL_ALPHABET_SET : new Set(alphabet)
   for (let i = 0; i < id.length; i++) {
     if (!charSet.has(id[i])) return false
   }
@@ -137,15 +149,12 @@ const isValid = (id, alphabet = urlAlphabet) => {
 const slugGenerator = customAlphabet(alphabets.lowercase + alphabets.numbers, 12)
 const shortGenerator = customAlphabet(alphabets.nolookalikes, 8)
 
-const slugId = (size = 12) => {
-  if (size === 12) return slugGenerator()
-  return customAlphabet(alphabets.lowercase + alphabets.numbers, size)()
-}
+// Slug-friendly ID (lowercase + numbers only). The cached generator's returned closure
+// honors any size argument, so we never need to build a fresh factory per call.
+const slugId = (size = 12) => slugGenerator(size)
 
-const shortId = (size = 8) => {
-  if (size === 8) return shortGenerator()
-  return customAlphabet(alphabets.nolookalikes, size)()
-}
+// Short ID without similar-looking characters. Same delegation pattern as slugId.
+const shortId = (size = 8) => shortGenerator(size)
 
 const decodeTime = sortableIdStr => {
   if (!sortableIdStr || sortableIdStr.length < 10) {

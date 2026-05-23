@@ -1,6 +1,27 @@
 nope-id changelog
 =================
 
+1.2.0 - 2x-5x faster nopeid(), browser/non-secure parity, auto-updating README benchmarks
++ change: nopeid() ~2.8x faster at the default 21-char size (~6.7M to ~18.9M ops/sec) and up to ~4.9x at 64 chars (~2.7M to ~13.3M). Achieved via three combined changes: a dedicated id-pool whose CSPRNG bytes are translated to alphabet character codes in place on refill; a precomputed 64 KiB Uint16Array table mapping every 16-bit value to its two translated alphabet codes so the refill loop runs at half the iteration count; and a single Buffer.toString('latin1') per call instead of ~21 ConsString allocations from per-character concatenation. Hot path is still CSPRNG-backed end to end, output still carries 126 bits of entropy
++ change: nope-id is now the fastest CSPRNG-backed JS library for URL-safe full-alphabet IDs at equal entropy. Beats uid/secure (~9.4M ops/sec, smaller alphabet/lower entropy) for the first time. Native crypto.randomUUID() remains the fastest for plain v4 UUIDs and we continue to recommend it for that specific case
++ change: prefixedId() benefits proportionally (~7.2M to ~16M ops/sec) because it composes on top of nopeid()
++ change: index.browser.js gets the same strategy adapted to the browser - Uint8Array + cached TextDecoder('latin1').decode() in place of Buffer.toString('latin1'). The 16-bit batch refill table is endian-agnostic by construction (each output byte still derives from its own input byte)
++ change: non-secure variants (nope-id/non-secure ESM + CJS) now build IDs in a Uint8Array of pre-translated codes and call String.fromCharCode.apply() once instead of per-character concatenation - ~3.4M to ~4.2M ops/sec at the default size
++ change: isValid() with the default urlAlphabet is ~16x faster (~442K to ~7M ops/sec) by hoisting a single Set at module level instead of allocating a fresh 64-element Set on every call. Custom alphabets keep the per-call Set
++ change: slugId(size) and shortId(size) at non-default sizes are ~1.4x faster - they now delegate to the cached factory (whose closure already accepts a size argument), instead of allocating a brand-new customAlphabet factory on each call
++ change: replaced Array.from(bytes, b => b & 31) with explicit for-loops in sortableId() and monotonicFactory() so the inner arrow does not depend on V8 hoisting. No measurable steady-state delta, just one fewer engine assumption
++ change: removed unused urlAlphabetLookup constant from index.js, index.cjs and index.browser.js (became dead code after the in-place pool translation landed). Resolves a Biome noUnusedVariables lint
++ feature: benchmark --json mode (node benchmarks/benchmark.js --json) emits structured results to stdout for tooling - meta (date, node, platform, arch, runner) plus grouped numbers (comparison, uuid, ulid, vs_others, extras). The human-readable colored output is suppressed in --json mode; the default invocation is unchanged
++ feature: scripts/update-readme.js refreshes the README performance tables from a benchmark JSON file. Six regions are bracketed by invisible HTML comment markers (bench:headline, bench:comparison-table, bench:uuid-table, bench:ulid-table, bench:speed-vs-entropy-table, bench:extras-table) plus a bench:meta line; the script throws on missing keys so a parser regression fails loudly instead of writing undefined into the markdown
++ feature: GitHub Actions workflow .github/workflows/benchmark-on-pr.yml runs on every pull_request against main, runs the full test gate (npm test, test:randomness, test:types, test:browser), then runs the JSON benchmark and commits the refreshed README back to the PR branch. actions/setup-node pinned to a SHA (v6.4.0) on node-version 26; concurrency cancels stale runs; fork PRs are skipped (no token to push back)
++ feature: tests/types.test.ts exercises every public export with explicit type annotations, compiled by tsc --noEmit. Catches index.d.ts drift at CI time
++ feature: tests/browser.test.js imports index.browser.js and validates 17 behaviors via the existing test-utils framework (default size, edge cases, cold path, uniqueness, prefixedId, sortableId+decodeTime round-trip, uuid v4 format, alphabet identity). Runs under Node 18+ using the global crypto and TextDecoder
++ feature: new npm scripts - benchmark:json, benchmark:update-readme, test:types, test:browser, test:all (composes the four CI gates locally)
++ feature: isValid() added to the benchmark and to the Extra Features performance table in README, since its speedup is now significant enough to be worth quoting
++ feature: README gets a runner disclaimer block under ## Performance noting that the numbers come from a shared ubuntu-latest runner and real machines often score higher; auto-refreshed bench:meta line shows the last refresh date / Node version / runner
++ feature: typescript added as a devDependency to support test:types (not shipped to consumers)
++ fix: nope-id/non-secure nopeid(size) with size < 0 no longer infinite-loops (the previous while (i--) pattern decremented past zero forever for negative size). Now returns '' for size <= 0, matching the documented behavior and the secure version
+
 1.1.0 - New ID formats, encoding helpers, and correctness fixes
 + feature: uuidv7() - time-ordered UUID v7 (RFC 9562), database-index friendly
 + feature: ulid() - spec-compliant 26-char ULID (Crockford Base32)

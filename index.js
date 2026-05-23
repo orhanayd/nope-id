@@ -7,8 +7,9 @@ import { webcrypto as crypto } from 'node:crypto'
 export const urlAlphabet =
   'useandom-26T198340PX75pxJACKVERYMINDBUSHWOLF_GQZbfghjklqvwyzrict'
 
-// Pre-computed lookup table for O(1) alphabet access (64 entries)
-const urlAlphabetLookup = /* @__PURE__ */ urlAlphabet.split('')
+// Single Set for the default urlAlphabet. isValid() reuses this when the caller
+// passes no custom alphabet, instead of building a fresh 64-element Set per call.
+const URL_ALPHABET_SET = /* @__PURE__ */ new Set(urlAlphabet)
 
 // Pre-built alphabets for different use cases
 // Object.freeze prevents modification and prototype pollution attacks
@@ -71,6 +72,36 @@ const fillPool = bytes => {
     poolOffset = 0
   }
   poolOffset += bytes
+}
+
+// Pre-computed char codes of the URL-safe alphabet, indexed by (byte & 63).
+// Drives both the 8-bit cold path and the 16-bit batch refill table below.
+const URL_ALPHABET_CODES = /* @__PURE__ */ Uint8Array.from(urlAlphabet, c => c.charCodeAt(0))
+
+// Dedicated pool for nopeid(): CSPRNG bytes translated in place to alphabet char codes.
+// Each call is then a single Buffer.toString('latin1') — one V8 one-byte string allocation
+// per ID, versus ~21 ConsString allocations from `id += alphabet[...]` per character.
+// Kept separate from `pool` (raw bytes for random()/customAlphabet()/uuid()/etc.).
+let idPool, idPoolOffset, idPoolView, idPoolCodes16
+
+const fillIdPool = () => {
+  if (!idPool) {
+    idPool = Buffer.allocUnsafe(MAX_POOL_SIZE)
+    idPoolView = new Uint16Array(idPool.buffer, idPool.byteOffset, MAX_POOL_SIZE >> 1)
+    // Built lazily on first refill: 64 KiB Uint16Array table maps any 16-bit value
+    // (two random bytes) directly to its two translated alphabet codes, so the refill
+    // loop runs at half the iteration count. The mapping is endian-agnostic because
+    // each output byte still corresponds to its own input byte through URL_ALPHABET_CODES.
+    idPoolCodes16 = new Uint16Array(0x10000)
+    for (let i = 0; i < 0x10000; i++) {
+      idPoolCodes16[i] = (URL_ALPHABET_CODES[(i >> 8) & 63] << 8) | URL_ALPHABET_CODES[i & 63]
+    }
+  }
+  fillBuffer(idPool)
+  const view = idPoolView
+  const table = idPoolCodes16
+  for (let i = 0; i < view.length; i++) view[i] = table[view[i]]
+  idPoolOffset = 0
 }
 
 // Shared zero-length result for non-positive random() requests (avoids pool corruption)
@@ -149,28 +180,20 @@ export const customAlphabet = (alphabet, defaultSize = 21) => {
 
 // Main nopeid function - 21 characters by default
 export const nopeid = (size = 21) => {
-  // Inline pool management for hot path performance
   size |= 0
   if (size <= 0) return ''
-  if (!pool || pool.length < size) {
-    const poolSize = Math.min(size * POOL_SIZE_MULTIPLIER, MAX_POOL_SIZE)
-    pool = Buffer.allocUnsafe(Math.max(poolSize, size))
-    fillBuffer(pool)
-    poolOffset = 0
-  } else if (poolOffset + size > pool.length) {
-    fillBuffer(pool)
-    poolOffset = 0
+  // Cold path: requested size exceeds the pool. Translate one-shot so we don't
+  // distort pool sizing (and don't repeatedly refill mid-request).
+  if (size > MAX_POOL_SIZE) {
+    const raw = Buffer.allocUnsafe(size)
+    fillBuffer(raw)
+    for (let i = 0; i < size; i++) raw[i] = URL_ALPHABET_CODES[raw[i] & 63]
+    return raw.toString('latin1')
   }
-
-  // Build with a local index (register-friendly) and advance the shared offset once
-  let id = ''
-  let i = poolOffset
-  const end = i + size
-  while (i < end) {
-    id += urlAlphabetLookup[pool[i++] & 63]
-  }
-  poolOffset = end
-  return id
+  if (!idPool || idPoolOffset + size > MAX_POOL_SIZE) fillIdPool()
+  const start = idPoolOffset
+  idPoolOffset += size
+  return idPool.toString('latin1', start, idPoolOffset)
 }
 
 // === COLLISION-RESISTANT FEATURES ===
@@ -216,10 +239,12 @@ export const sortableId = (size = 22) => {
       return sortableId(size)
     }
   } else {
-    // New millisecond - generate fresh random
+    // New millisecond - generate fresh random. Manual loop instead of Array.from(arr, fn)
+    // so we don't rely on V8 to hoist the (b => b & 31) literal.
     lastTime = now
     const bytes = random(RANDOM_LENGTH)
-    lastRandom = Array.from(bytes, b => b & 31)
+    lastRandom = new Array(RANDOM_LENGTH)
+    for (let i = 0; i < RANDOM_LENGTH; i++) lastRandom[i] = bytes[i] & 31
   }
 
   // Encode timestamp (10 chars, supports until year 10889)
@@ -277,8 +302,9 @@ export const generateMany = (count, size = 21) => {
 export const isValid = (id, alphabet = urlAlphabet) => {
   if (typeof id !== 'string' || id.length === 0) return false
 
-  // Use Set for O(1) lookup
-  const charSet = new Set(alphabet)
+  // Reuse the hoisted Set for the common (urlAlphabet) case; only allocate when a
+  // caller passes a custom alphabet. Set has O(1) lookup either way.
+  const charSet = alphabet === urlAlphabet ? URL_ALPHABET_SET : new Set(alphabet)
 
   // Constant-time validation: always check all characters
   // to prevent timing attacks that could leak valid character positions
@@ -336,17 +362,12 @@ export const uuid = () => {
 const slugGenerator = customAlphabet(alphabets.lowercase + alphabets.numbers, 12)
 const shortGenerator = customAlphabet(alphabets.nolookalikes, 8)
 
-// Slug-friendly ID (lowercase + numbers only)
-export const slugId = (size = 12) => {
-  if (size === 12) return slugGenerator()
-  return customAlphabet(alphabets.lowercase + alphabets.numbers, size)()
-}
+// Slug-friendly ID (lowercase + numbers only). The cached generator's returned closure
+// honors any size argument, so we never need to build a fresh factory per call.
+export const slugId = (size = 12) => slugGenerator(size)
 
-// Short ID without similar-looking characters
-export const shortId = (size = 8) => {
-  if (size === 8) return shortGenerator()
-  return customAlphabet(alphabets.nolookalikes, size)()
-}
+// Short ID without similar-looking characters. Same delegation pattern as slugId.
+export const shortId = (size = 8) => shortGenerator(size)
 
 // Decode sortable ID timestamp
 export const decodeTime = sortableIdStr => {
@@ -438,8 +459,11 @@ export const monotonicFactory = () => {
         lastRand[i] = 0
       }
     } else {
+      // Manual loop instead of Array.from(arr, fn) so we don't rely on V8 hoisting.
       lastTime = seedTime
-      lastRand = Array.from(random(16), b => b & 31)
+      const bytes = random(16)
+      lastRand = new Array(16)
+      for (let i = 0; i < 16; i++) lastRand[i] = bytes[i] & 31
     }
     const out = new Uint16Array(26)
     let ms = seedTime
