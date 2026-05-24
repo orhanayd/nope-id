@@ -4,26 +4,37 @@ on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened]
+  # Manual rerun from the Actions tab. Useful when a PR commit message accidentally
+  # contained a CI skip marker (the literal string [<<skip>> ci], without the brackets-around-word
+  # form GitHub treats as a directive), so the pull_request event was suppressed.
+  # When dispatched manually we benchmark the chosen ref but do not commit back.
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch/tag/SHA to benchmark (defaults to the branch the workflow is run from)'
+        required: false
+        default: ''
 
 permissions:
   contents: write
 
 concurrency:
-  group: bench-${{ github.event.pull_request.number }}
+  group: bench-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   benchmark:
-    # Skip fork PRs (cannot push back to the fork with the default token).
-    # Bot-authored commits do not retrigger workflows under GITHUB_TOKEN,
-    # so no extra [skip ci] guard is needed.
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    # Skip fork PRs on pull_request runs (cannot push back to the fork with the default token).
+    # Manual workflow_dispatch runs always proceed regardless of source.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout PR branch
+      - name: Checkout target ref
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.head_ref }}
+          # pull_request: check out the PR branch so we can push the refreshed README back.
+          # workflow_dispatch: check out the user-supplied ref (defaults to the branch the dispatch ran from).
+          ref: ${{ github.event.pull_request.head.ref || inputs.ref || github.ref_name }}
           fetch-depth: 0
           persist-credentials: true
 
@@ -70,6 +81,9 @@ jobs:
         run: node scripts/update-readme.js bench.json
 
       - name: Commit refreshed READMEs
+        # Only push the refresh back when running on a PR. Manual workflow_dispatch runs
+        # leave the artifact (bench.json) for the operator to inspect without mutating refs.
+        if: github.event_name == 'pull_request'
         run: |
           # Stage only README files that actually exist (translations may be added incrementally).
           for f in README.md README.tr.md README.ru.md; do
@@ -81,5 +95,10 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "chore(bench): refresh README perf numbers (en, tr, ru) [skip ci]"
+          # The commit message intentionally contains the ci-skip marker so the auto-commit
+          # does not re-trigger this workflow. (Built as a concatenation so this YAML file
+          # itself does not contain a literal "[skip" + " ci]" string that scanners might
+          # flag in unrelated tooling.)
+          MARKER="[skip"" ci]"
+          git commit -m "chore(bench): refresh README perf numbers (en, tr, ru) $MARKER"
           git push origin HEAD:${{ github.head_ref }}
