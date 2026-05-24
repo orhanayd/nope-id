@@ -34,19 +34,43 @@ const alphabets = Object.freeze(Object.create(null, {
 
 // Crockford's Base32 alphabet for sortable IDs
 const CROCKFORD_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
-// Char codes for fast String.fromCharCode building of Crockford ids (ulid)
-const CROCKFORD_CODES = /* @__PURE__ */ Uint16Array.from(CROCKFORD_ALPHABET, c => c.charCodeAt(0))
+// Char codes (all ASCII, fit in a byte) used to write Crockford ids straight into Buffers.
+const CROCKFORD_CODES = /* @__PURE__ */ Uint8Array.from(CROCKFORD_ALPHABET, c => c.charCodeAt(0))
+
+// Reusable 22-byte sortableId scratch buffer (10 ts + 12 random).
+const SORT_BUF = /* @__PURE__ */ Buffer.allocUnsafe(22)
 
 // Precomputed byte -> 2-char hex (faster + clearer than toString(16).padStart per byte)
 const byteToHex = /* @__PURE__ */ Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'))
+// Byte -> hi/lo ASCII hex char codes, used to write directly into UUID_BUF.
+const HEX_HI = /* @__PURE__ */ Uint8Array.from(byteToHex, s => s.charCodeAt(0))
+const HEX_LO = /* @__PURE__ */ Uint8Array.from(byteToHex, s => s.charCodeAt(1))
 
-// Format 16 bytes as a hyphenated UUID string (faster than toString('hex') + slicing)
-const bytesToUuid = b =>
-  byteToHex[b[0]] + byteToHex[b[1]] + byteToHex[b[2]] + byteToHex[b[3]] + '-' +
-  byteToHex[b[4]] + byteToHex[b[5]] + '-' +
-  byteToHex[b[6]] + byteToHex[b[7]] + '-' +
-  byteToHex[b[8]] + byteToHex[b[9]] + '-' +
-  byteToHex[b[10]] + byteToHex[b[11]] + byteToHex[b[12]] + byteToHex[b[13]] + byteToHex[b[14]] + byteToHex[b[15]]
+// Reusable 36-byte UUID scratch with hyphens pre-baked at 8/13/18/23.
+const UUID_BUF = /* @__PURE__ */ Buffer.allocUnsafe(36)
+UUID_BUF[8] = UUID_BUF[13] = UUID_BUF[18] = UUID_BUF[23] = 0x2d
+
+// Format 16 bytes as a hyphenated UUID string by writing 32 hex char codes into
+// UUID_BUF and one-shot toString'ing — beats 16 string lookups + 4 ConsString joins.
+const bytesToUuid = b => {
+  UUID_BUF[0]  = HEX_HI[b[0]];  UUID_BUF[1]  = HEX_LO[b[0]]
+  UUID_BUF[2]  = HEX_HI[b[1]];  UUID_BUF[3]  = HEX_LO[b[1]]
+  UUID_BUF[4]  = HEX_HI[b[2]];  UUID_BUF[5]  = HEX_LO[b[2]]
+  UUID_BUF[6]  = HEX_HI[b[3]];  UUID_BUF[7]  = HEX_LO[b[3]]
+  UUID_BUF[9]  = HEX_HI[b[4]];  UUID_BUF[10] = HEX_LO[b[4]]
+  UUID_BUF[11] = HEX_HI[b[5]];  UUID_BUF[12] = HEX_LO[b[5]]
+  UUID_BUF[14] = HEX_HI[b[6]];  UUID_BUF[15] = HEX_LO[b[6]]
+  UUID_BUF[16] = HEX_HI[b[7]];  UUID_BUF[17] = HEX_LO[b[7]]
+  UUID_BUF[19] = HEX_HI[b[8]];  UUID_BUF[20] = HEX_LO[b[8]]
+  UUID_BUF[21] = HEX_HI[b[9]];  UUID_BUF[22] = HEX_LO[b[9]]
+  UUID_BUF[24] = HEX_HI[b[10]]; UUID_BUF[25] = HEX_LO[b[10]]
+  UUID_BUF[26] = HEX_HI[b[11]]; UUID_BUF[27] = HEX_LO[b[11]]
+  UUID_BUF[28] = HEX_HI[b[12]]; UUID_BUF[29] = HEX_LO[b[12]]
+  UUID_BUF[30] = HEX_HI[b[13]]; UUID_BUF[31] = HEX_LO[b[13]]
+  UUID_BUF[32] = HEX_HI[b[14]]; UUID_BUF[33] = HEX_LO[b[14]]
+  UUID_BUF[34] = HEX_HI[b[15]]; UUID_BUF[35] = HEX_LO[b[15]]
+  return UUID_BUF.toString('latin1', 0, 36)
+}
 
 // Pool management for reduced system calls
 // Max pool size is 65536 (crypto.getRandomValues limit)
@@ -84,7 +108,7 @@ const URL_ALPHABET_CODES = /* @__PURE__ */ Uint8Array.from(urlAlphabet, c => c.c
 // Each call is then a single Buffer.toString('latin1') — one V8 one-byte string allocation
 // per ID, versus ~21 ConsString allocations from `id += alphabet[...]` per character.
 // Kept separate from `pool` (raw bytes for random()/customAlphabet()/uuid()/etc.).
-let idPool, idPoolOffset, idPoolView, idPoolCodes16
+let idPool, idPoolOffset, idPoolView, idPoolCodes16, idPoolStr
 
 const fillIdPool = () => {
   if (!idPool) {
@@ -103,6 +127,9 @@ const fillIdPool = () => {
   const view = idPoolView
   const table = idPoolCodes16
   for (let i = 0; i < view.length; i++) view[i] = table[view[i]]
+  // Pay V8's Buffer.toString fixed cost once per refill, not once per call.
+  // Hot path returns idPoolStr.substring(a,b) — SlicedString for sizes ≥13.
+  idPoolStr = idPool.toString('latin1')
   idPoolOffset = 0
 }
 
@@ -122,29 +149,32 @@ const customRandom = (alphabet, defaultSize, getRandom) => {
   if (!alphabet || alphabet.length === 0) {
     throw new Error('Alphabet cannot be empty')
   }
-  // Pre-compute constants and lookup table
-  const alphabetLookup = alphabet.split('')
+  const codes = Uint8Array.from(alphabet, c => c.charCodeAt(0))
   const len = alphabet.length
-  // Calculate mask for rejection sampling (power of 2 - 1)
   const mask = (2 << (31 - Math.clz32((len - 1) | 1))) - 1
-  // Increase step to account for rejection sampling overhead
   const step = Math.ceil((1.6 * mask * defaultSize) / len)
+
+  const CPOOL_TARGET = 32768
+  let cPool = '', cPoolOffset = 0
 
   return (size = defaultSize) => {
     if (size <= 0) return ''
-    let id = ''
-    while (true) {
-      const bytes = getRandom(step)
-      let i = step
-      while (i--) {
-        // Rejection sampling: skip values >= alphabet length to eliminate bias
-        const idx = bytes[i] & mask
-        if (idx < len) {
-          id += alphabetLookup[idx]
-          if (id.length >= size) return id
+    if (cPoolOffset + size > cPool.length) {
+      const buf = Buffer.allocUnsafe(CPOOL_TARGET + step)
+      let n = 0
+      while (n < CPOOL_TARGET) {
+        const bytes = getRandom(step)
+        for (let i = 0; i < step; i++) {
+          const idx = bytes[i] & mask
+          if (idx < len) buf[n++] = codes[idx]
         }
       }
+      cPool = buf.toString('latin1', 0, n)
+      cPoolOffset = 0
     }
+    const start = cPoolOffset
+    cPoolOffset += size
+    return cPool.substring(start, cPoolOffset)
   }
 }
 
@@ -155,26 +185,33 @@ const customAlphabet = (alphabet, defaultSize = 21) => {
   if (alphabet.length > 256) {
     throw new Error('Alphabet cannot be longer than 256 characters')
   }
-  // Same rejection sampling as customRandom, but reads the shared pool directly
-  // (no per-call subarray allocation) for speed; this also powers slugId/shortId.
-  const alphabetLookup = alphabet.split('')
+  const codes = Uint8Array.from(alphabet, c => c.charCodeAt(0))
   const len = alphabet.length
   const mask = (2 << (31 - Math.clz32((len - 1) | 1))) - 1
   const step = Math.ceil((1.6 * mask * defaultSize) / len)
+
+  const CPOOL_TARGET = 32768
+  let cPool = '', cPoolOffset = 0
+
   return (size = defaultSize) => {
     if (size <= 0) return ''
-    let id = ''
-    while (true) {
-      fillPool(step)
-      const base = poolOffset - step
-      for (let i = 0; i < step; i++) {
-        const idx = pool[base + i] & mask
-        if (idx < len) {
-          id += alphabetLookup[idx]
-          if (id.length >= size) return id
+    if (cPoolOffset + size > cPool.length) {
+      const buf = Buffer.allocUnsafe(CPOOL_TARGET + step)
+      let n = 0
+      while (n < CPOOL_TARGET) {
+        fillPool(step)
+        const base = poolOffset - step
+        for (let i = 0; i < step; i++) {
+          const idx = pool[base + i] & mask
+          if (idx < len) buf[n++] = codes[idx]
         }
       }
+      cPool = buf.toString('latin1', 0, n)
+      cPoolOffset = 0
     }
+    const start = cPoolOffset
+    cPoolOffset += size
+    return cPool.substring(start, cPoolOffset)
   }
 }
 
@@ -193,7 +230,7 @@ const nopeid = (size = 21) => {
   if (!idPool || idPoolOffset + size > MAX_POOL_SIZE) fillIdPool()
   const start = idPoolOffset
   idPoolOffset += size
-  return idPool.toString('latin1', start, idPoolOffset)
+  return idPoolStr.substring(start, idPoolOffset)
 }
 
 // Monotonic state for sortable IDs
@@ -240,30 +277,20 @@ const sortableId = (size = 22) => {
     for (let i = 0; i < RANDOM_LENGTH; i++) lastRandom[i] = bytes[i] & 31
   }
 
-  let timestamp = ''
+  // Encode directly into a reusable 22-byte buffer (avoids prepend-style ConsString churn).
   let t = now
-  for (let i = 9; i >= 0; i--) {
-    timestamp = CROCKFORD_ALPHABET[t & 31] + timestamp
-    t = Math.floor(t / 32)
-  }
-
-  let randomPart = ''
-  for (let i = 0; i < RANDOM_LENGTH; i++) {
-    randomPart += CROCKFORD_ALPHABET[lastRandom[i]]
-  }
-
-  const fullId = timestamp + randomPart
+  for (let i = 9; i >= 0; i--) { SORT_BUF[i] = CROCKFORD_CODES[t & 31]; t = Math.floor(t / 32) }
+  for (let i = 0; i < RANDOM_LENGTH; i++) SORT_BUF[10 + i] = CROCKFORD_CODES[lastRandom[i]]
 
   if (size >= 22) {
-    if (size === 22) return fullId
-    // Extend with Crockford Base32 (bias-free, & 31) instead of urlAlphabet
+    if (size === 22) return SORT_BUF.toString('latin1', 0, 22)
     const extraLen = size - 22
+    const tail = Buffer.allocUnsafe(extraLen)
     const extra = random(extraLen)
-    let tail = ''
-    for (let i = 0; i < extraLen; i++) tail += CROCKFORD_ALPHABET[extra[i] & 31]
-    return fullId + tail
+    for (let i = 0; i < extraLen; i++) tail[i] = CROCKFORD_CODES[extra[i] & 31]
+    return SORT_BUF.toString('latin1', 0, 22) + tail.toString('latin1')
   }
-  return fullId.slice(0, size)
+  return SORT_BUF.toString('latin1', 0, size)
 }
 
 const prefixedId = (prefix, size = 21, separator = '_') => {
@@ -331,12 +358,60 @@ const nopeidAsync = async (size = 21) => {
   return nopeid(size)
 }
 
+// UUID v4 generator. Backed by a string pool of pre-formatted v4 UUIDs: at refill
+// time we draw 4096*16 fresh CSPRNG bytes, apply the v4 version + RFC 4122 variant
+// bit patches per slot, write 32 hex chars (hyphens are pre-baked at positions
+// 8/13/18/23), then toString once for the whole 144 KiB. Each call is then a single
+// substring(start, start+36) — a SlicedString on a flat one-byte parent.
+const UUID_POOL_COUNT = 4096
+const UUID_POOL_BYTES = UUID_POOL_COUNT * 36
+let uuidPool, uuidPoolStr, uuidPoolOffset, uuidRawScratch
 const uuid = () => {
-  const bytes = random(16)
-  bytes[6] = (bytes[6] & 0x0f) | 0x40
-  bytes[8] = (bytes[8] & 0x3f) | 0x80
-
-  return bytesToUuid(bytes)
+  if (!uuidPool || uuidPoolOffset >= UUID_POOL_BYTES) {
+    if (!uuidPool) {
+      uuidPool = Buffer.allocUnsafe(UUID_POOL_BYTES)
+      for (let k = 0; k < UUID_POOL_COUNT; k++) {
+        const o = k * 36
+        uuidPool[o + 8] = uuidPool[o + 13] = uuidPool[o + 18] = uuidPool[o + 23] = 0x2d
+      }
+      uuidRawScratch = Buffer.allocUnsafe(UUID_POOL_COUNT * 16)
+    }
+    fillBuffer(uuidRawScratch)
+    const raw = uuidRawScratch
+    for (let k = 0; k < UUID_POOL_COUNT; k++) {
+      const ri = k << 4
+      const oo = k * 36
+      const b0 = raw[ri], b1 = raw[ri + 1], b2 = raw[ri + 2], b3 = raw[ri + 3]
+      const b4 = raw[ri + 4], b5 = raw[ri + 5]
+      const b6 = (raw[ri + 6] & 0x0f) | 0x40
+      const b7 = raw[ri + 7]
+      const b8 = (raw[ri + 8] & 0x3f) | 0x80
+      const b9 = raw[ri + 9]
+      const b10 = raw[ri + 10], b11 = raw[ri + 11], b12 = raw[ri + 12]
+      const b13 = raw[ri + 13], b14 = raw[ri + 14], b15 = raw[ri + 15]
+      uuidPool[oo]      = HEX_HI[b0];  uuidPool[oo + 1]  = HEX_LO[b0]
+      uuidPool[oo + 2]  = HEX_HI[b1];  uuidPool[oo + 3]  = HEX_LO[b1]
+      uuidPool[oo + 4]  = HEX_HI[b2];  uuidPool[oo + 5]  = HEX_LO[b2]
+      uuidPool[oo + 6]  = HEX_HI[b3];  uuidPool[oo + 7]  = HEX_LO[b3]
+      uuidPool[oo + 9]  = HEX_HI[b4];  uuidPool[oo + 10] = HEX_LO[b4]
+      uuidPool[oo + 11] = HEX_HI[b5];  uuidPool[oo + 12] = HEX_LO[b5]
+      uuidPool[oo + 14] = HEX_HI[b6];  uuidPool[oo + 15] = HEX_LO[b6]
+      uuidPool[oo + 16] = HEX_HI[b7];  uuidPool[oo + 17] = HEX_LO[b7]
+      uuidPool[oo + 19] = HEX_HI[b8];  uuidPool[oo + 20] = HEX_LO[b8]
+      uuidPool[oo + 21] = HEX_HI[b9];  uuidPool[oo + 22] = HEX_LO[b9]
+      uuidPool[oo + 24] = HEX_HI[b10]; uuidPool[oo + 25] = HEX_LO[b10]
+      uuidPool[oo + 26] = HEX_HI[b11]; uuidPool[oo + 27] = HEX_LO[b11]
+      uuidPool[oo + 28] = HEX_HI[b12]; uuidPool[oo + 29] = HEX_LO[b12]
+      uuidPool[oo + 30] = HEX_HI[b13]; uuidPool[oo + 31] = HEX_LO[b13]
+      uuidPool[oo + 32] = HEX_HI[b14]; uuidPool[oo + 33] = HEX_LO[b14]
+      uuidPool[oo + 34] = HEX_HI[b15]; uuidPool[oo + 35] = HEX_LO[b15]
+    }
+    uuidPoolStr = uuidPool.toString('latin1')
+    uuidPoolOffset = 0
+  }
+  const start = uuidPoolOffset
+  uuidPoolOffset += 36
+  return uuidPoolStr.substring(start, uuidPoolOffset)
 }
 
 // Pre-cached generators
@@ -413,39 +488,49 @@ const uuidv7 = () => {
 
 // === ULID (spec-compliant, 26 chars: 10 timestamp + 16 random, Crockford Base32) ===
 
+// Module-level scratch buffer reused across ulid() calls (no per-call alloc).
+const ULID_BUF = /* @__PURE__ */ Buffer.allocUnsafe(26)
+
 // 26-char ULID. Fresh randomness each call (non-monotonic); use monotonicFactory() for ordering.
 const ulid = (seedTime = Date.now()) => {
   const bytes = random(16)
-  const out = new Uint16Array(26)
   let ms = seedTime
-  for (let i = 9; i >= 0; i--) { out[i] = CROCKFORD_CODES[ms % 32]; ms = Math.floor(ms / 32) }
-  for (let i = 0; i < 16; i++) out[10 + i] = CROCKFORD_CODES[bytes[i] & 31]
-  return String.fromCharCode.apply(null, out)
+  for (let i = 9; i >= 0; i--) { ULID_BUF[i] = CROCKFORD_CODES[ms % 32]; ms = Math.floor(ms / 32) }
+  for (let i = 0; i < 16; i++) ULID_BUF[10 + i] = CROCKFORD_CODES[bytes[i] & 31]
+  return ULID_BUF.toString('latin1', 0, 26)
 }
 
 // Monotonic ULID factory with ISOLATED state (does not touch global sortableId state).
+// Closure buffer is reused; same-ms calls rewrite only the touched random-part bytes.
 const monotonicFactory = () => {
   let lastTime = 0
   let lastRand = []
+  const out = Buffer.allocUnsafe(26)
   return (seedTime = Date.now()) => {
     if (seedTime <= lastTime) {
       seedTime = lastTime
       for (let i = 15; i >= 0; i--) {
-        if (lastRand[i] < 31) { lastRand[i]++; break }
+        if (lastRand[i] < 31) {
+          lastRand[i]++
+          out[10 + i] = CROCKFORD_CODES[lastRand[i]]
+          break
+        }
         lastRand[i] = 0
+        out[10 + i] = CROCKFORD_CODES[0]
       }
-    } else {
-      // Manual loop instead of Array.from(arr, fn) so we don't rely on V8 hoisting.
-      lastTime = seedTime
-      const bytes = random(16)
-      lastRand = new Array(16)
-      for (let i = 0; i < 16; i++) lastRand[i] = bytes[i] & 31
+      return out.toString('latin1', 0, 26)
     }
-    const out = new Uint16Array(26)
+    // Manual loop instead of Array.from(arr, fn) so we don't rely on V8 hoisting.
+    lastTime = seedTime
+    const bytes = random(16)
+    lastRand = new Array(16)
     let ms = seedTime
     for (let i = 9; i >= 0; i--) { out[i] = CROCKFORD_CODES[ms % 32]; ms = Math.floor(ms / 32) }
-    for (let i = 0; i < 16; i++) out[10 + i] = CROCKFORD_CODES[lastRand[i]]
-    return String.fromCharCode.apply(null, out)
+    for (let i = 0; i < 16; i++) {
+      lastRand[i] = bytes[i] & 31
+      out[10 + i] = CROCKFORD_CODES[lastRand[i]]
+    }
+    return out.toString('latin1', 0, 26)
   }
 }
 

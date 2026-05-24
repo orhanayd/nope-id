@@ -66,17 +66,20 @@ jobs:
           name: bench-results
           path: bench.json
 
-      - name: Refresh README perf tables
+      - name: Refresh README perf tables (en + tr + ru)
         run: node scripts/update-readme.js bench.json
 
-      - name: Commit refreshed README
+      - name: Commit refreshed READMEs
         run: |
-          if git diff --quiet README.md; then
+          # Stage only README files that actually exist (translations may be added incrementally).
+          for f in README.md README.tr.md README.ru.md; do
+            [ -f "$f" ] && git add "$f"
+          done
+          if git diff --cached --quiet; then
             echo "No README changes."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add README.md
-          git commit -m "chore(bench): refresh README perf numbers [skip ci]"
+          git commit -m "chore(bench): refresh README perf numbers (en, tr, ru) [skip ci]"
           git push origin HEAD:${{ github.head_ref }}
