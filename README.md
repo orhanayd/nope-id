@@ -1,11 +1,13 @@
 # nope-id
 
+> 🌐 **Read in another language:** [English](README.md) · [Türkçe](README.tr.md) · [Русский](README.ru.md)
+
 A tiny, secure, URL-friendly unique string ID generator for JavaScript.
 
 **A faster, more secure alternative to nanoid with extra features!**
 
 <!-- bench:headline:start -->
-- **Faster** - 2x to 5x faster than nanoid (CSPRNG, full URL-safe alphabet); wins all 5 core benchmarks ([see benchmarks](#performance))
+- **Faster** - 5x to 8x faster than nanoid (CSPRNG, full URL-safe alphabet); wins all 5 core benchmarks ([see benchmarks](#performance))
 <!-- bench:headline:end -->
 - **Security Hardened** - Timing attack prevention, modulo bias elimination, prototype pollution protection ([see security](#security))
 - **Well Tested** - 307 tests including security & entropy tests ([see testing](#testing))
@@ -961,7 +963,7 @@ npm run test:randomness
 > Run `npm run benchmark` locally to see numbers on your own machine.
 
 <!-- bench:meta:start -->
-_Last refreshed: 2026-05-23, Node v26.x, ubuntu-latest (GitHub Actions)._
+_Last refreshed: 2026-05-24, Node v21.x, darwin/arm64 (local)._
 <!-- bench:meta:end -->
 
 ### nope-id vs nanoid Benchmark
@@ -979,26 +981,27 @@ npm run benchmark
 <!-- bench:comparison-table:start -->
 | Test | nanoid 5.1.11 | nope-id | Winner |
 |------|--------|---------|--------|
-| Basic (21 chars) | ~5.1M ops/sec | **~12.3M ops/sec** | **nope-id ~2.4x** |
-| Small (10 chars) | ~9.6M ops/sec | **~13.7M ops/sec** | **nope-id ~1.4x** |
-| Large (64 chars) | ~2.0M ops/sec | **~9.6M ops/sec** | **nope-id ~4.9x** |
-| Custom Alphabet | ~5.6M ops/sec | **~6.9M ops/sec** | **nope-id ~1.3x** |
-| Batch (100 IDs) | ~55K ops/sec | **~124K ops/sec** | **nope-id ~2.3x** |
+| Basic (21 chars) | ~7.2M ops/sec | **~52.2M ops/sec** | **nope-id ~7.2x** |
+| Small (10 chars) | ~13.6M ops/sec | **~63.4M ops/sec** | **nope-id ~4.7x** |
+| Large (64 chars) | ~2.9M ops/sec | **~22.1M ops/sec** | **nope-id ~7.7x** |
+| Custom Alphabet | ~6.6M ops/sec | **~30.9M ops/sec** | **nope-id ~4.7x** |
+| Batch (100 IDs) | ~70K ops/sec | **~532K ops/sec** | **nope-id ~7.6x** |
 <!-- bench:comparison-table:end -->
 
 **Result: nope-id wins 5/5 against nanoid** for URL-safe IDs, while providing many extra features and security hardening.
 
 ### Where the speed comes from (and where it doesn't)
 
-nope-id is the fastest **JavaScript** library for a specific, very common job: a **cryptographically secure, URL-safe id over a full 64-character alphabet** (the nanoid niche). In that category it beats nanoid (around 2.8x at the default 21-char size, up to 4.9x for 64-char IDs), and it also produces UUIDv7 and ULID far faster than the dedicated packages (roughly **6x** the `uuid` package's v7 and **~50x** the `ulid` package).
+nope-id is the fastest **JavaScript** library for a specific, very common job: a **cryptographically secure, URL-safe id over a full 64-character alphabet** (the nanoid niche). In that category it beats nanoid by ~5–8x across the standard sizes (4.7x at 10 chars, 7.2x at the default 21, 7.7x at 64), and it also produces UUIDv7 and ULID far faster than the dedicated packages (~**8x** the `uuid` package's v7 and ~**60x** the `ulid` package).
 
 The speed comes from the engineering, not from cutting corners on randomness:
 
-- **Pre-translated pool:** the CSPRNG byte pool is translated in place to alphabet character codes on refill, so generating an ID is one `Buffer.toString('latin1')` call instead of 21 string concatenations. This replaces the per-character ConsString chain with a single V8 one-byte string allocation.
+- **Cached pool string:** the CSPRNG byte pool is translated in place to alphabet character codes on refill, then decoded **once** to a flat one-byte string (`idPool.toString('latin1')`) cached as `idPoolStr`. Each `nopeid()` call then returns a single `idPoolStr.substring(start, end)`, a V8 SlicedString (O(1), zero-copy) for sizes ≥ 13 and a tiny inline copy below that, instead of paying `Buffer.toString`'s ~50 ns fixed cost per call. Same trick powers `customAlphabet`, `uuid()`, and friends.
 - **16-bit batch refill:** the in-place translation walks the pool in 16-bit chunks via a precomputed 64 KiB `Uint16Array` table that maps any two random bytes directly to two alphabet codes, halving the refill iteration count (endian-agnostic by construction).
-- **Pooled CSPRNG:** one `crypto.getRandomValues()` fill covers thousands of IDs at the default size instead of one syscall per ID.
+- **Pooled CSPRNG:** one `crypto.getRandomValues()` fill covers thousands of IDs at the default size instead of one syscall per ID. `uuid()` goes further: it pre-formats 4096 v4 UUIDs (with version + RFC 4122 variant bits already patched per slot) into one 144 KiB string, so each call is just a `substring(start, start+36)`.
 - **Bitmask, no modulo:** alphabet index comes from `byte & 63` on a 64-character alphabet, so there is no rejection sampling or modulo bias on the hot path.
-- **Precomputed tables for everything else:** byte to hex for `uuid()`/`uuidv7()`/`objectId()`, char codes for Crockford in `ulid()`/`monotonicFactory()`.
+- **Precomputed tables for everything else:** byte to hex for `uuid()`/`uuidv7()`/`objectId()`, char codes for Crockford in `ulid()`/`monotonicFactory()`, plus reusable module-scope scratch buffers (`UUID_BUF`, `SORT_BUF`, `ULID_BUF`) so the per-call path never allocates.
+- **Allocation-free `customAlphabet`:** reads the shared byte pool directly, mapping rejected-sampled bytes into a pre-decoded char-code pool whose hot path is again `substring(start, end)`; this also speeds up `slugId()` and `shortId()`.
 
 What nope-id does **not** try to beat:
 
@@ -1014,12 +1017,12 @@ A benchmark is only meaningful against more than one tool (thanks to nanoid's au
 <!-- bench:uuid-table:start -->
 | Generator | ops/sec | |
 |---|---|---|
-| `crypto.randomUUID()` (Node native, v4) | **~21.4M** | 🥇 fastest for plain v4 |
-| nope-id `uuid()` (v4) | ~6.2M | on par with `@lukeed/uuid`, ahead of `uuid` |
-| `@lukeed/uuid` `v4()` | ~6.6M | optimized pure-JS v4 |
-| `uuid` package `v4()` | ~5.7M | |
-| nope-id `uuidv7()` | ~4.0M | **~9x the `uuid` package's v7** |
-| `uuid` package `v7()` | ~452K | |
+| `crypto.randomUUID()` (Node native, v4) | **~26.2M** | 🥇 fastest for plain v4 |
+| nope-id `uuid()` (v4) | ~24.8M | on par with `@lukeed/uuid`, ahead of `uuid` |
+| `@lukeed/uuid` `v4()` | ~8.1M | optimized pure-JS v4 |
+| `uuid` package `v4()` | ~8.0M | |
+| nope-id `uuidv7()` | ~7.4M | **~8x the `uuid` package's v7** |
+| `uuid` package `v7()` | ~871K | |
 <!-- bench:uuid-table:end -->
 
 **Honest take:** if all you need is a random v4 UUID, **Node's built-in `crypto.randomUUID()` is by far the fastest, so use it.** nope-id doesn't try to beat native there. Its value is **breadth**: UUIDv7, ULID, Snowflake, ObjectId, Sqids, typed IDs and nanoid-style short IDs (most of which the `uuid` package and native don't offer), plus being faster than nanoid for URL-safe IDs and faster than the `uuid` package (especially v7), all dual-module and zero-dependency.
@@ -1033,10 +1036,10 @@ nope-id ships a spec-compliant `ulid()` plus an isolated `monotonicFactory()`. S
 <!-- bench:ulid-table:start -->
 | Generator | ops/sec |
 |---|---|
-| nope-id `ulid()` | **~2.3M** |
-| `ulid` package | ~30K |
-| nope-id `monotonicFactory()` | **~2.5M** |
-| `ulid` package (monotonic) | ~2.3M |
+| nope-id `ulid()` | **~3.2M** |
+| `ulid` package | ~49K |
+| nope-id `monotonicFactory()` | **~14.4M** |
+| `ulid` package (monotonic) | ~2.2M |
 <!-- bench:ulid-table:end -->
 
 nope-id is far faster for plain `ulid()` because it draws randomness from a pooled buffer (one fill per 16 IDs), whereas the `ulid` package fetches randomness per character. Decode the timestamp from either with `decodeTime()`. (The `ulid` package is also zero-dependency.)
@@ -1048,21 +1051,21 @@ Two things matter for an id generator: **speed** and **entropy**, the amount of 
 <!-- bench:speed-vs-entropy-table:start -->
 | Generator | ops/sec | entropy / id | randomness source |
 |---|---|---|---|
-| **nope-id `nopeid()`** | **~12.3M** | **~126 bits (64-char URL-safe)** | **CSPRNG** |
-| `uid/secure` | ~5.9M | ~84 bits (16-char hex) | CSPRNG |
-| nanoid | ~5.1M | ~126 bits (64-char URL-safe) | CSPRNG |
-| `rndm` | ~2.8M | ~125 bits, but predictable | `Math.random` (not secure) |
-| `secure-random-string` | ~392K | ~126 bits (base64, not URL-safe) | CSPRNG |
-| cuid2 `createId()` | ~5.7K | 24-char, hash-derived | CSPRNG + SHA-3 |
+| **nope-id `nopeid()`** | **~52.2M** | **~126 bits (64-char URL-safe)** | **CSPRNG** |
+| `uid/secure` | ~9.8M | ~84 bits (16-char hex) | CSPRNG |
+| nanoid | ~7.2M | ~126 bits (64-char URL-safe) | CSPRNG |
+| `rndm` | ~3.5M | ~125 bits, but predictable | `Math.random` (not secure) |
+| `secure-random-string` | ~661K | ~126 bits (base64, not URL-safe) | CSPRNG |
+| cuid2 `createId()` | ~7.1K | 24-char, hash-derived | CSPRNG + SHA-3 |
 <!-- bench:speed-vs-entropy-table:end -->
 
 Read as two axes, **speed** and **security**, every other library gives something up on one of them:
 
 - **`uid/secure`** is fast, but pays with a smaller alphabet: ~84 bits per 21-char id against nope-id's ~126. For equal security you would have to make `uid` longer, at which point nope-id is already ahead per bit.
 - **`rndm`** is fast too, but it is built on `Math.random`, so its bits are predictable; its own README calls it "not cryptographically secure."
-- **`secure-random-string`** matches nope-id's entropy but is roughly 25x slower and emits base64 (not URL-safe).
+- **`secure-random-string`** matches nope-id's entropy but is roughly 80x slower and emits base64 (not URL-safe).
 - **cuid2** spends speed on purpose for a hardened, sharding-safe, hash-based model.
-- **nanoid** matches nope-id's entropy exactly (same 64-char alphabet); nope-id is simply ~2.8x faster at the default 21-char size.
+- **nanoid** matches nope-id's entropy exactly (same 64-char alphabet); nope-id is simply ~7.2x faster at the default 21-char size.
 
 nope-id is the one row that has **all three at once**: maximum entropy per character (126 bits), a real CSPRNG, and top-tier speed. That is the whole design goal, fast without ever spending randomness to get there. (For a plain v4 UUID, native `crypto.randomUUID()` is still faster at 122 bits in C++, so use it when a UUID is all you need.)
 
@@ -1073,31 +1076,19 @@ These features are exclusive to nope-id (nanoid doesn't have them):
 <!-- bench:extras-table:start -->
 | Feature | Performance |
 |---------|-------------|
-| `sortableId()` | ~3.9M ops/sec |
-| `prefixedId()` | ~10.9M ops/sec |
-| `uuid()` | ~6.4M ops/sec |
-| `slugId()` | ~4.4M ops/sec |
-| `shortId()` | ~9.2M ops/sec |
-| `isValid()` | ~10.6M ops/sec |
-| `uuidv7()` | ~4.3M ops/sec |
-| `ulid()` | ~2.3M ops/sec |
-| `monotonicFactory()` | ~2.7M ops/sec |
+| `sortableId()` | ~8.9M ops/sec |
+| `prefixedId()` | ~38.7M ops/sec |
+| `uuid()` | ~24.7M ops/sec |
+| `slugId()` | ~8.7M ops/sec |
+| `shortId()` | ~19.7M ops/sec |
+| `isValid()` | ~5.6M ops/sec |
+| `uuidv7()` | ~7.4M ops/sec |
+| `ulid()` | ~3.3M ops/sec |
+| `monotonicFactory()` | ~14.4M ops/sec |
 | `snowflake` (factory) | ~4.1M ops/sec |
-| `objectId()` | ~6.8M ops/sec |
-| `sqids.encode()` | ~202K ops/sec |
+| `objectId()` | ~10M ops/sec |
+| `sqids.encode()` | ~327K ops/sec |
 <!-- bench:extras-table:end -->
-
-### Why nope-id is Fast
-
-- **Pre-translated Pool**: `nopeid()` stores alphabet character codes in the pool (not raw bytes), so each call is a single `Buffer.toString('latin1')`, one V8 one-byte string allocation per ID instead of ~21 ConsString allocations from per-character concatenation
-- **16-bit Batch Refill**: a 64 KiB `Uint16Array` table maps any two random bytes directly to two alphabet codes, halving the in-place translation loop (endian-agnostic by construction)
-- **Optimized Pool Management**: 65 KiB CSPRNG pool covers thousands of IDs per `crypto.getRandomValues()` call at the default 21-char size
-- **Bitwise Operations**: `byte & 63` on a 64-character alphabet, no modulo and no rejection sampling on the hot path
-- **Pre-computed Lookup Tables**: Array access instead of string indexing for O(1) character lookup
-- **Pre-cached Generators**: Common functions like `slugId()` and `shortId()` use cached generators
-- **Precomputed Hex & Crockford Tables**: `uuid()`/`uuidv7()`/`objectId()`/`ulid()` format via byte to hex and char-code tables instead of per-byte conversion
-- **Allocation-free `customAlphabet`**: reads the shared byte pool directly (no per-call view allocation), which also speeds up `slugId()` and `shortId()`
-- **Zero Dependencies**: No external library overhead
 
 ---
 
