@@ -82,13 +82,18 @@ const L = {
       head: ['Generator', 'ops/sec', ''],
       sep:  ['---', '---', '---'],
       notes: {
-        crypto: '🥇 fastest for plain v4',
-        nopeV4: 'on par with `@lukeed/uuid`, ahead of `uuid`',
+        // Static
         lukeed: 'optimized pure-JS v4',
-        empty: '',
         nopeV7: ratio => `**~${ratio}x the \`uuid\` package's v7**`,
+        // Dynamic, ratio-driven (see uuid-table renderer)
+        cryptoFastest:  '🥇 fastest for plain v4',
+        cryptoCBinding: 'C++ binding (plain v4 only)',
+        nopeFastestJs:  '🥇 fastest pure-JS v4',
+        nopeBeatsLukeed: ratio => `~${ratio}x faster than \`@lukeed/uuid\`, ahead of \`uuid\``,
+        nopeOnPar:      'on par with `@lukeed/uuid`, ahead of `uuid`',
       },
     },
+    basic21Ratio: ratio => `~${ratio}x`,
     tUlid: {
       head: ['Generator', 'ops/sec'],
       sep:  ['---', '---'],
@@ -139,13 +144,16 @@ const L = {
       head: ['Üretici', 'op/sn', ''],
       sep:  ['---', '---', '---'],
       notes: {
-        crypto: '🥇 düz v4 için en hızlı',
-        nopeV4: '`@lukeed/uuid` ile aynı seviyede, `uuid` paketinden önde',
         lukeed: 'optimize saf-JS v4',
-        empty: '',
         nopeV7: ratio => `**\`uuid\` paketinin v7\'sinin ~${ratio}x'i**`,
+        cryptoFastest:  '🥇 düz v4 için en hızlı',
+        cryptoCBinding: 'C++ binding (yalnız düz v4)',
+        nopeFastestJs:  '🥇 en hızlı saf-JS v4',
+        nopeBeatsLukeed: ratio => `\`@lukeed/uuid\`\'den ~${ratio}x daha hızlı, \`uuid\` paketinden önde`,
+        nopeOnPar:      '`@lukeed/uuid` ile aynı seviyede, `uuid` paketinden önde',
       },
     },
+    basic21Ratio: ratio => `~${ratio}x`,
     tUlid: {
       head: ['Üretici', 'op/sn'],
       sep:  ['---', '---'],
@@ -196,11 +204,13 @@ const L = {
       head: ['Генератор', 'оп/сек', ''],
       sep:  ['---', '---', '---'],
       notes: {
-        crypto: '🥇 самый быстрый для обычного v4',
-        nopeV4: 'на уровне `@lukeed/uuid`, быстрее пакета `uuid`',
         lukeed: 'оптимизированный pure-JS v4',
-        empty: '',
         nopeV7: ratio => `**~${ratio}x от v7 пакета \`uuid\`**`,
+        cryptoFastest:  '🥇 самый быстрый для обычного v4',
+        cryptoCBinding: 'C++ binding (только обычный v4)',
+        nopeFastestJs:  '🥇 самый быстрый pure-JS v4',
+        nopeBeatsLukeed: ratio => `~${ratio}x быстрее \`@lukeed/uuid\`, быстрее пакета \`uuid\``,
+        nopeOnPar:      'на уровне `@lukeed/uuid`, быстрее пакета `uuid`',
       },
     },
     tUlid: {
@@ -227,12 +237,16 @@ const L = {
       head: ['Функция', 'Производительность'],
       sep:  ['---------', '-------------'],
     },
+    basic21Ratio: ratio => `~${ratio}x`,
   },
 }
 
 // === Region replacement ===
 
-const mkReplace = readme => (name, body) => {
+// Block bodies (tables, multi-line text) get newlines around them; inline bodies
+// (single-value tokens like ratios) are spliced flush with the markers so the
+// surrounding sentence keeps flowing on one line.
+const mkReplace = readme => (name, body, { inline = false } = {}) => {
   const re = new RegExp(
     `(<!-- bench:${name}:start -->)[\\s\\S]*?(<!-- bench:${name}:end -->)`,
     'm'
@@ -240,7 +254,8 @@ const mkReplace = readme => (name, body) => {
   if (!re.test(readme.value)) {
     throw new Error(`README is missing marker pair for "${name}"`)
   }
-  readme.value = readme.value.replace(re, `$1\n${body}\n$2`)
+  const sep = inline ? '' : '\n'
+  readme.value = readme.value.replace(re, `$1${sep}${body}${sep}$2`)
 }
 
 // === Per-file refresh ===
@@ -281,20 +296,59 @@ const refresh = (filePath, loc) => {
   }
 
   // === UUID table ===
+  // Notes (medal + comparison wording) are derived from the actual numbers so the
+  // table cannot contradict itself when a CI run produces a noisy ordering.
   {
     const u = bench.uuid
-    const ratio = Math.round(u.nope_uuidv7.opsPerSec / u.uuid_v7.opsPerSec)
+    const n = loc.tUuid.notes
+
+    const nativeOps = u.crypto_randomUUID.opsPerSec
+    const nopeOps   = u.nope_uuid.opsPerSec
+    const lukeedOps = u.lukeed_uuid.opsPerSec
+    const nopeBeatsNative = nopeOps > nativeOps
+
+    // Bold the row holding the highest ops/sec between native and nope-id.
+    const nativeOpsStr = nopeBeatsNative ? fmtOps(nativeOps) : `**${fmtOps(nativeOps)}**`
+    const nopeOpsStr   = nopeBeatsNative ? `**${fmtOps(nopeOps)}**` : fmtOps(nopeOps)
+
+    // Crypto row: medal when fastest, else note that it is a C++ binding.
+    const cryptoNote = nopeBeatsNative ? n.cryptoCBinding : n.cryptoFastest
+
+    // Nope row: medal if it leads native; else describe ratio vs @lukeed/uuid.
+    // Threshold ~1.2x picks "Nx faster"; tighter band ~0.83–1.2x reads as "on par".
+    const rNopeLukeed = nopeOps / lukeedOps
+    let nopeNote
+    if (nopeBeatsNative) {
+      nopeNote = n.nopeFastestJs
+    } else if (rNopeLukeed >= 1.2) {
+      // Pass the number only ("2.9"); each locale's template adds the ~ and x.
+      const ratioStr = rNopeLukeed.toFixed(1).replace(/\.0$/, '')
+      nopeNote = n.nopeBeatsLukeed(ratioStr)
+    } else if (rNopeLukeed >= 0.83) {
+      nopeNote = n.nopeOnPar
+    } else {
+      nopeNote = ''
+    }
+
+    const v7ratio = Math.round(u.nope_uuidv7.opsPerSec / u.uuid_v7.opsPerSec)
     const lines = [
       '| ' + loc.tUuid.head.join(' | ').replace(/ $/, '') + ' |',
       '|' + loc.tUuid.sep.join('|') + '|',
-      `| \`crypto.randomUUID()\` (Node native, v4) | **${fmtOps(u.crypto_randomUUID.opsPerSec)}** | ${loc.tUuid.notes.crypto} |`,
-      `| nope-id \`uuid()\` (v4) | ${fmtOps(u.nope_uuid.opsPerSec)} | ${loc.tUuid.notes.nopeV4} |`,
-      `| \`@lukeed/uuid\` \`v4()\` | ${fmtOps(u.lukeed_uuid.opsPerSec)} | ${loc.tUuid.notes.lukeed} |`,
+      `| \`crypto.randomUUID()\` (Node native, v4) | ${nativeOpsStr} | ${cryptoNote} |`,
+      `| nope-id \`uuid()\` (v4) | ${nopeOpsStr} | ${nopeNote} |`,
+      `| \`@lukeed/uuid\` \`v4()\` | ${fmtOps(lukeedOps)} | ${n.lukeed} |`,
       `| \`uuid\` package \`v4()\` | ${fmtOps(u.uuid_v4.opsPerSec)} | |`,
-      `| nope-id \`uuidv7()\` | ${fmtOps(u.nope_uuidv7.opsPerSec)} | ${loc.tUuid.notes.nopeV7(ratio)} |`,
+      `| nope-id \`uuidv7()\` | ${fmtOps(u.nope_uuidv7.opsPerSec)} | ${n.nopeV7(v7ratio)} |`,
       `| \`uuid\` package \`v7()\` | ${fmtOps(u.uuid_v7.opsPerSec)} | |`,
     ]
     replaceRegion('uuid-table', lines.join('\n'))
+  }
+
+  // === basic-21 ratio (inline, single number, no table) ===
+  // Used in the "speed vs entropy" prose: "nope-id is simply ~Nx faster at the default 21-char size".
+  {
+    const r = bench.comparison.basic_21.ratio
+    replaceRegion('basic-21-ratio', loc.basic21Ratio(r.toFixed(1).replace(/\.0$/, '')), { inline: true })
   }
 
   // === ULID table ===
