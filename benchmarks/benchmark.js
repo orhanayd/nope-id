@@ -27,6 +27,7 @@ import rndm from 'rndm'
 import srs from 'secure-random-string'
 import { uid } from 'uid/secure'
 import { v4 as lukeedUuid } from '@lukeed/uuid'
+import { generateId as sparkidGen } from 'sparkid'
 
 const TRIALS = 7
 const TARGET_MS = 120
@@ -292,11 +293,13 @@ const uidResult = benchmark('uid/secure(21) (hex)', () => uid(21))
 const rndmResult = benchmark('rndm (Math.random, insecure)', () => rndm(21))
 const srsResult = benchmark('secure-random-string', () => srs({ length: 21 }))
 const cuid2Result = benchmark('cuid2 createId()', () => cuid2())
+const sparkidResult = benchmark('sparkid generateId()', () => sparkidGen())
 const nopeidVsOthers = benchmark('nope-id nopeid()', () => nopeid())
 record('vs_others', 'uid_secure', uidResult.opsPerSec)
 record('vs_others', 'rndm', rndmResult.opsPerSec)
 record('vs_others', 'secure_random_string', srsResult.opsPerSec)
 record('vs_others', 'cuid2', cuid2Result.opsPerSec)
+record('vs_others', 'sparkid', sparkidResult.opsPerSec)
 record('vs_others', 'nope_nopeid', nopeidVsOthers.opsPerSec)
 
 log('\n  \x1b[1mOther random string generators:\x1b[0m')
@@ -304,11 +307,14 @@ printResult(uidResult)
 printResult(rndmResult)
 printResult(srsResult)
 printResult(cuid2Result)
+printResult(sparkidResult)
 printResult(nopeidVsOthers)
 
 log('\n  \x1b[2muid/secure is fastest but emits 16-char hex (fewer bits per char). Among')
-log('  full-alphabet URL-safe generators nope-id leads nanoid. rndm uses Math.random')
-log('  (insecure); cuid2 throttles on purpose; the ulid package randomizes per char.\x1b[0m')
+log('  full-alphabet URL-safe generators nope-id leads nanoid. sparkid is CSPRNG-backed,')
+log('  sortable + monotonic Base58, but spends 8/21 chars on a time prefix. rndm uses')
+log('  Math.random (insecure); cuid2 throttles on purpose; the ulid package randomizes')
+log('  per char.\x1b[0m')
 
 // ============================================
 // 6. Batch Generation

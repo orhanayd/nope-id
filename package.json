@@ -97,6 +97,7 @@
 		"nanoid": "^5.1.11",
 		"rndm": "^1.2.0",
 		"secure-random-string": "^1.1.4",
+		"sparkid": "^2.2.1",
 		"typescript": "^5.9.3",
 		"uid": "^2.0.2",
 		"ulid": "^3.0.2",
