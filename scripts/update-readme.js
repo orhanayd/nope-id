@@ -98,6 +98,10 @@ const L = {
       head: ['Generator', 'ops/sec'],
       sep:  ['---', '---'],
     },
+    tSortable: {
+      head: ['Generator', 'ops/sec'],
+      sep:  ['---', '---'],
+    },
     tSpeed: {
       head: ['Generator', 'ops/sec', 'entropy / id', 'randomness source'],
       sep:  ['---', '---', '---', '---'],
@@ -107,6 +111,7 @@ const L = {
         rndm:      '~125 bits, but predictable',
         base64:    '~126 bits (base64, not URL-safe)',
         cuid2:     '24-char, hash-derived',
+        sparkid:   '~76 bits random (Base58, time-sortable)',
       },
       source: {
         csprng:     'CSPRNG',
@@ -158,6 +163,10 @@ const L = {
       head: ['Üretici', 'op/sn'],
       sep:  ['---', '---'],
     },
+    tSortable: {
+      head: ['Üretici', 'op/sn'],
+      sep:  ['---', '---'],
+    },
     tSpeed: {
       head: ['Üretici', 'op/sn', 'entropi / id', 'rastgelelik kaynağı'],
       sep:  ['---', '---', '---', '---'],
@@ -167,6 +176,7 @@ const L = {
         rndm:      '~125 bit, ama öngörülebilir',
         base64:    '~126 bit (base64, URL-safe değil)',
         cuid2:     '24-karakter, hash-türevli',
+        sparkid:   '~76 bit rastgele (Base58, zaman-sıralı)',
       },
       source: {
         csprng:     'CSPRNG',
@@ -217,6 +227,10 @@ const L = {
       head: ['Генератор', 'оп/сек'],
       sep:  ['---', '---'],
     },
+    tSortable: {
+      head: ['Генератор', 'оп/сек'],
+      sep:  ['---', '---'],
+    },
     tSpeed: {
       head: ['Генератор', 'оп/сек', 'энтропия / id', 'источник случайности'],
       sep:  ['---', '---', '---', '---'],
@@ -226,6 +240,7 @@ const L = {
         rndm:      '~125 бит, но предсказуемые',
         base64:    '~126 бит (base64, не URL-безопасный)',
         cuid2:     '24 символа, hash-производный',
+        sparkid:   '~76 бит случайных (Base58, сортируемый по времени)',
       },
       source: {
         csprng:     'CSPRNG',
@@ -365,6 +380,22 @@ const refresh = (filePath, loc) => {
     replaceRegion('ulid-table', lines.join('\n'))
   }
 
+  // === Sortable head-to-head: nope-id sortableId() (22-char) vs sparkid (21-char) ===
+  // Both are CSPRNG-backed, sortable + monotonic. Different default sizes and alphabets,
+  // so this is a "natural defaults" comparison, not a strict format-identical one.
+  {
+    const sortableOps = bench.extras.sortableId.opsPerSec
+    const sparkidOps  = bench.vs_others.sparkid.opsPerSec
+    const nopeBeats = sortableOps > sparkidOps
+    const lines = [
+      '| ' + loc.tSortable.head.join(' | ') + ' |',
+      '|' + loc.tSortable.sep.join('|') + '|',
+      `| nope-id \`sortableId()\` (22-char Crockford) | ${nopeBeats ? `**${fmtOps(sortableOps)}**` : fmtOps(sortableOps)} |`,
+      `| \`sparkid\` (21-char Base58) | ${nopeBeats ? fmtOps(sparkidOps) : `**${fmtOps(sparkidOps)}**`} |`,
+    ]
+    replaceRegion('sortable-table', lines.join('\n'))
+  }
+
   // === Speed vs entropy table ===
   {
     const v = bench.vs_others
@@ -375,6 +406,7 @@ const refresh = (filePath, loc) => {
       { gen: '**nope-id `nopeid()`**', ops: nopeidOps,                    entropy: `**${E.urlsafe64}**`, src: `**${S.csprng}**`, bold: true },
       { gen: '`uid/secure`',           ops: v.uid_secure.opsPerSec,         entropy: E.hex16,              src: S.csprng },
       { gen: 'nanoid',                 ops: nanoidOps,                    entropy: E.urlsafe64,          src: S.csprng },
+      { gen: '`sparkid`',              ops: v.sparkid.opsPerSec,            entropy: E.sparkid,            src: S.csprng },
       { gen: '`rndm`',                 ops: v.rndm.opsPerSec,               entropy: E.rndm,               src: S.mathRandom },
       { gen: '`secure-random-string`', ops: v.secure_random_string.opsPerSec, entropy: E.base64,           src: S.csprng },
       { gen: 'cuid2 `createId()`',     ops: v.cuid2.opsPerSec,              entropy: E.cuid2,              src: S.sha3 },
