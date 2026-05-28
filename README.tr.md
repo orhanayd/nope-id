@@ -9,14 +9,14 @@ JavaScript için minik, güvenli, URL-dostu benzersiz string ID üreteci.
 <!-- bench:headline:start -->
 - **Daha Hızlı** - nanoid'den 3x ila 9x daha hızlı (CSPRNG, tam URL-safe alfabe); 5 temel benchmark'ın hepsini kazanıyor ([benchmark'lara bak](#performans))
 <!-- bench:headline:end -->
-- **Güvenlik Sertleştirilmiş** - Zamanlama saldırısı önleme, modulo bias eliminasyonu, prototype pollution koruması ([güvenlik](#güvenlik))
-- **İyi Test Edilmiş** - Güvenlik ve entropi testleri dahil 307 test ([test etme](#test-etme))
+- **Güvenlik Sertleştirilmiş** - Azaltılmış zamanlama sızıntı doğrulayıcıları, modulo bias eliminasyonu, prototype pollution koruması ([güvenlik](#güvenlik))
+- **İyi Test Edilmiş** - Güvenlik ve entropi testleri dahil 342 test ([test etme](#test-etme))
 - **Kriptografik Olarak Güvenli** - `webcrypto.getRandomValues()` (CSPRNG) kullanır
 - **Sıfır Bağımlılık** - Dış bağımlılık yok
 - **URL-safe** - `A-Za-z0-9_-` karakterlerini kullanır
 - **Dual Module** - Hem ESM (`import`) hem CommonJS (`require`) ile çalışır
 - **TypeScript** - Tam tür tanımları dahil
-- **Çakışmaya Dayanıklı** - Monotonik sortable ID'ler, dağıtık-güvenli ID'ler
+- **Çakışmaya Dayanıklı** - Kesin monotonik sortable ID'ler, kaynak-etiketli dağıtık ID'ler
 - **Birçok ID Formatı** - UUID v4 & **v7**, **ULID** (spec uyumlu + monotonik factory), **Snowflake**, **MongoDB ObjectId**
 - **Ekstra Özellikler** - Prefix'li ID'ler, sortable ID'ler, **Sqids** (geri çevrilebilir kodlama), **typed ID'ler**, format doğrulayıcılar ve daha fazlası!
 
@@ -389,7 +389,7 @@ const fingerprint = getFingerprint()
 
 #### `distributedId(size = 25)`
 
-Process fingerprint'i ile dağıtık-güvenli bir ID üretir. Çok-node'lu ortamlar için mükemmel!
+Process fingerprint önekli bir ID üretir. Çok-süreçli / çok-node'lu sistemlerde ID kaynağını izlemek için kullanışlıdır. Çakışma direnci rastgele kuyruktan gelir — `size` ona yer bırakmalı (en az 16; daha küçük değerler hata fırlatır).
 
 **Format:** `fingerprint_randomPart`
 
@@ -399,13 +399,14 @@ import { distributedId, getFingerprint } from 'nope-id'
 
 distributedId()   // "aB3x_V1StGXR8_Z5jdHi6B" (25 karakter)
 distributedId(30) // "aB3x_V1StGXR8_Z5jdHi6B-myT1" (30 karakter)
+distributedId(8)  // hata fırlatır — size en az 16 olmalı
 
-// Dağıtık sistemde her node kendi fingerprint'i ile ID üretir
+// Çok-süreçli / çok-node'lu sistemlerde her kaynağın ID'leri kendi fingerprint'ini taşır
 // Node 1: "aB3x_V1StGXR8_Z5jdHi6B"
 // Node 2: "kL9m_IRFa-VaY2bKwxyz12"
 // Node 3: "pQ7r_Z5jdHi6B-myTV1St8"
 
-// Bir ID'yi hangi node ürettiğini belirle
+// Bir ID'yi hangi kaynak ürettiğini belirle
 const id = distributedId()
 const nodeFingerprint = id.split('_')[0]
 console.log(`Üreten node: ${nodeFingerprint}`)
@@ -455,7 +456,7 @@ console.log(info)
 // {
 //   totalPossible: 9007199254740991,   // MAX_SAFE_INTEGER'a sınırlandırılmış (tam değer için totalPossibleBigInt kullan)
 //   totalPossibleBigInt: 85070591730234615865843651857942052864n, // 64^21 ≈ 8.5e37
-//   probabilityForBillion: 0,          // ~5.9e-21, double precision'da 0'a yuvarlanır
+//   probabilityForBillion: 5.877471748233966e-21, // Math.expm1 ile doğru hesaplanır
 //   safeCount: 1.086e+19,              // bu kadar ID üretildikten sonra ~%50 çakışma
 //   yearsFor1Percent: 4.133e+7         // 1 ID/ms hızında %1 çakışmaya kaç yıl
 // }
@@ -668,17 +669,23 @@ const { prefixedId, sortableId } = require('nope-id')
 
 ```javascript
 // ES Modules
-import { nopeid, prefixedId } from 'nope-id'
+import { apiKey, secureToken, defineToken } from 'nope-id'
 
-// API anahtarları
-const apiKey = prefixedId('sk', 32)  // "sk_V1StGXR8_Z5jdHi6B-myTV1StGXR8_"
+// Önekli API anahtarı (havuzsuz, geçici, önek doğrulanır)
+const key = apiKey('sk_live', 40)        // "sk_live_<40 karakter>"
 
-// Refresh token'lar
-const refreshToken = nopeid(64)  // 64 karakter güvenli token
+// Refresh / oturum / parola sıfırlama token'ları
+const refreshToken = secureToken(48)     // 48 karakter URL-safe, CSPRNG, sıfırlanır
+
+// generate / is / parse üçlüsü olan tipli token
+const SessionToken = defineToken('sess', { size: 48 })
+const sessionToken = SessionToken.generate()
 
 // CommonJS
-const { nopeid, prefixedId } = require('nope-id')
+const { apiKey, secureToken, defineToken } = require('nope-id')
 ```
+
+> `secureToken` ailesi `nopeid()` string havuzunu bypass eder — her çağrı kendi CSPRNG dolumudur, bu yüzden bir bellek dump'ı henüz üretilmemiş token'ları açığa çıkaramaz. Bearer secret'lar için bunu kullanın. Genel ID'ler için `nopeid()` / `prefixedId()` yeterlidir.
 
 ### URL Kısaltıcı
 
@@ -845,7 +852,7 @@ nope-id güvenliği öncelikli olarak tasarlanmıştır. Temel kriptografik rand
 
 | Güvenlik Özelliği | Açıklama |
 |-----------------|-------------|
-| **Zamanlama Saldırısı Önleme** | `isValid()`, geçerli karakterler hakkında bilgi sızdırabilecek zamanlama yan-kanal saldırılarını önlemek için sabit-zamanlı karşılaştırma kullanır |
+| **Azaltılmış Zamanlama Sızıntısı** | `isValid()` ilk-hatalı-karakter erken dönüşünden kaçınır; en bariz pozisyon-oracle saldırılarını azaltır. (Gerçek sabit-zaman değildir — V8 Set.has zamanlaması homojen garanti edilmez.) |
 | **Modulo Bias Eliminasyonu** | Tüm alfabe boyutları için (sadece 2'nin kuvvetleri değil) mükemmel uniform dağılımı sağlamak için rejection sampling kullanır |
 | **Prototype Pollution Koruması** | `alphabets` objesi null prototype ile donmuştur, prototype pollution saldırılarına karşı bağışıklıdır |
 | **Integer Overflow Koruması** | `collisionProbability()` astronomik büyüklükteki sayılarla doğru hesaplama için BigInt kullanır |
@@ -863,7 +870,7 @@ nope-id güvenliği öncelikli olarak tasarlanmıştır. Temel kriptografik rand
 
 ## Test Etme
 
-nope-id, güvenlik-spesifik testler dahil **307 test** ile 6 test suite'inde kapsamlı test kapsamına sahiptir.
+nope-id, güvenlik-spesifik testler dahil **342 test** ile 8 test suite'inde kapsamlı test kapsamına sahiptir.
 
 ### Testleri Çalıştırma
 
@@ -900,7 +907,7 @@ Sertleştirme önlemlerimizi doğrulayan özel güvenlik testlerimiz var:
 📦 isValid() Güvenliği
   ✅ null byte içeren string'leri reddediyor
   ✅ unicode sıfır-genişlik karakterleri içeren string'leri reddediyor
-  ✅ sabit-zamanlı doğrulama (zamanlama saldırısı önleme)
+  ✅ erken-dönüşsüz doğrulama (zamanlama sızıntısını azaltır)
 
 📦 Prototype Pollution Önleme
   ✅ alphabets objesi donmuş

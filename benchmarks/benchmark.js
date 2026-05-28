@@ -18,6 +18,9 @@ import {
   snowflakeFactory,
   objectId,
   sqidsFactory,
+  orderedId,
+  secureToken,
+  apiKey,
 } from '../index.js'
 import { randomUUID } from 'node:crypto'
 import { v4 as uuidV4, v7 as uuidV7 } from 'uuid'
@@ -315,6 +318,49 @@ log('  full-alphabet URL-safe generators nope-id leads nanoid. sparkid is CSPRNG
 log('  sortable + monotonic Base58, but spends 8/21 chars on a time prefix. rndm uses')
 log('  Math.random (insecure); cuid2 throttles on purpose; the ulid package randomizes')
 log('  per char.\x1b[0m')
+
+// ============================================
+// nope-id orderedId() vs sparkid (same shape: 21-char Base58, sortable, monotonic)
+// ============================================
+log('\n\x1b[36m═════════════════════════════════════════════════════\x1b[0m')
+log('\x1b[36m  Sortable 21-char Base58 IDs: orderedId vs sparkid\x1b[0m')
+log('\x1b[36m═════════════════════════════════════════════════════\x1b[0m')
+
+const orderedIdResult = benchmark('nope-id orderedId()', () => orderedId())
+const sparkidVsOrdered = benchmark('sparkid generateId()', () => sparkidGen())
+record('vs_others', 'nope_orderedId', orderedIdResult.opsPerSec)
+record('vs_others', 'sparkid_vs_ordered', sparkidVsOrdered.opsPerSec)
+
+printResult(orderedIdResult)
+printResult(sparkidVsOrdered)
+
+log('\n  \x1b[2morderedId and sparkid have the same output shape (21-char Base58, sortable,')
+log('  strictly monotonic). orderedId adds clock-rewind clamping, synthetic-time')
+log('  counter overflow (no busy-wait), and one extra char of per-call random')
+log('  entropy (8 vs sparkid\'s 7). Throughput is comparable within run-to-run')
+log('  noise on Node LTS — see benchmarks/orderedid-vs-sparkid.bench.js for the')
+log('  15-trial head-to-head harness this claim is based on.\x1b[0m')
+
+// ============================================
+// Secure token throughput baseline
+// ============================================
+log('\n\x1b[36m═════════════════════════════════════════════════════\x1b[0m')
+log('\x1b[36m  Secure bearer tokens (unpooled, ephemeral)\x1b[0m')
+log('\x1b[36m═════════════════════════════════════════════════════\x1b[0m')
+
+const secureToken48 = benchmark('secureToken(48)', () => secureToken(48))
+const secureToken32 = benchmark('secureToken(32)', () => secureToken(32))
+const apiKeyResult = benchmark('apiKey()', () => apiKey())
+record('extras', 'secureToken_48', secureToken48.opsPerSec)
+record('extras', 'secureToken_32', secureToken32.opsPerSec)
+record('extras', 'apiKey', apiKeyResult.opsPerSec)
+
+printResult(secureToken48)
+printResult(secureToken32)
+printResult(apiKeyResult)
+
+log('\n  \x1b[2mUnpooled by design — each call is its own CSPRNG fill + zeroize. Slower')
+log('  than nopeid(), but a memory dump cannot leak tokens that were not yet issued.\x1b[0m')
 
 // ============================================
 // 6. Batch Generation

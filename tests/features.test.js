@@ -170,6 +170,28 @@ describe('sortableId()', () => {
     const id = sortableId(1)
     assert.equal(id.length, 1)
   })
+
+  test('remains monotonic across a simulated clock rewind', () => {
+    const realNow = Date.now
+    let virtualNow = realNow()
+    Date.now = () => virtualNow
+    try {
+      const a = sortableId()
+      // System clock jumps backwards by 1 second (NTP correction, VM resume, etc.)
+      virtualNow -= 1000
+      const b = sortableId()
+      assert.ok(b >= a, `clock rewind broke monotonicity: ${a} -> ${b}`)
+      let prev = b
+      for (let i = 0; i < 100; i++) {
+        virtualNow += 1
+        const cur = sortableId()
+        assert.ok(cur >= prev)
+        prev = cur
+      }
+    } finally {
+      Date.now = realNow
+    }
+  })
 })
 
 describe('decodeTime()', () => {
@@ -232,6 +254,10 @@ describe('generateMany()', () => {
     const ids = generateMany(10000)
     const unique = new Set(ids)
     assert.equal(unique.size, 10000)
+  })
+
+  test('throws when count exceeds max (1M)', () => {
+    assert.throws(() => generateMany(1_000_001), /exceeds maximum/)
   })
 
   test('returns array type', () => {
@@ -421,24 +447,22 @@ describe('distributedId()', () => {
     assert.equal(ids.size, 100)
   })
 
-  test('handles size equal to fingerprint + separator', () => {
-    // fingerprint is 4 chars + 1 separator = 5
-    const id = distributedId(5)
-    assert.equal(id.length, 5)
-    assert.ok(id.endsWith('_'))
+  test('throws on size below min (16)', () => {
+    for (const arg of [0, -5, 3, 5, 15]) {
+      assert.throws(() => distributedId(arg), /must be an integer >= 16/)
+    }
   })
 
-  test('handles size smaller than fingerprint + separator', () => {
-    const id = distributedId(3)
-    assert.equal(id.length, 3)
+  test('throws on non-integer size', () => {
+    assert.throws(() => distributedId(20.5), /must be an integer/)
+    assert.throws(() => distributedId('25'), /must be an integer/)
   })
 
-  test('handles zero size', () => {
-    assert.equal(distributedId(0), '')
-  })
-
-  test('handles negative size', () => {
-    assert.equal(distributedId(-5), '')
+  test('accepts boundary size 16', () => {
+    const id = distributedId(16)
+    const fp = getFingerprint()
+    assert.equal(id.length, 16)
+    assert.ok(id.startsWith(fp + '_'))
   })
 
   test('fingerprint is consistent across calls', () => {

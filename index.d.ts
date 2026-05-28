@@ -103,6 +103,9 @@ export function prefixedId(
  * Sizes > 22 are padded with extra Crockford Base32 random chars; sizes < 22 are
  * truncated to the timestamp prefix, which weakens the same-millisecond monotonic /
  * uniqueness guarantee, so use size >= 22 when you rely on monotonicity.
+ * @deprecated Prefer {@link orderedId} — fixed 21-char Base58, strictly monotonic,
+ *             with explicit counter overflow handling. sortableId() is kept for
+ *             backward compatibility.
  * @param size - Total ID length (default: 22)
  * @returns Sortable ID string (chronologically sortable)
  */
@@ -110,9 +113,10 @@ export function sortableId(size?: number): string
 
 /**
  * Generate multiple IDs at once
- * @param count - Number of IDs to generate
+ * @param count - Number of IDs to generate (max 1,000,000)
  * @param size - ID length (default: 21)
  * @returns Array of ID strings (empty array if count <= 0)
+ * @throws Error if count exceeds the 1,000,000 maximum
  */
 export function generateMany(count: number, size?: number): string[]
 
@@ -196,10 +200,13 @@ export function decodeTime(sortableIdStr: string): Date
 export function getFingerprint(): string
 
 /**
- * Generate a distributed-safe ID with process fingerprint
- * Format: fingerprint_randomPart
- * @param size - Total ID length (default: 25)
- * @returns Distributed-safe ID string
+ * Generate an ID with a process-fingerprint prefix. Useful for tracing the
+ * origin of an ID in multi-process / multi-node systems. Collision resistance
+ * comes from the random tail — `size` must leave room for it.
+ * Format: `fingerprint_randomPart`
+ * @param size - Total ID length (default: 25; minimum: 16)
+ * @returns ID string of the form `<fingerprint>_<random>`
+ * @throws Error if size is not an integer >= 16
  */
 export function distributedId(size?: number): string
 
@@ -272,8 +279,8 @@ export function objectId(): string
 
 /**
  * Extract the creation Date from an ObjectId (first 4 bytes = seconds since epoch).
- * @param id - ObjectId hex string (at least 8 characters)
- * @throws Error if id is too short
+ * @param id - 24-character lowercase or uppercase hex string
+ * @throws Error if id is not a 24-character hex string
  */
 export function decodeObjectIdTime(id: string): Date
 
@@ -340,5 +347,85 @@ export function isValidUUID(id: string, version?: number): boolean
  * @param id - String to validate
  */
 export function isValidULID(id: string): boolean
+
+/**
+ * Generate a bearer token for security-sensitive use cases (URL-safe, 64-char
+ * alphabet, bias-free CSPRNG). Unlike {@link nopeid}, secureToken() does not
+ * cache or pre-generate future tokens; each call allocates its own local buffer,
+ * fills it from CSPRNG, maps to the alphabet, and zeros the raw bytes before
+ * returning. The returned JavaScript string itself cannot be zeroized — store
+ * HASHED tokens (e.g. SHA-256) in your database, never the raw token.
+ * @param size - Token length in characters (default 48, min 32)
+ * @throws Error if size is not an integer >= 32
+ */
+export function secureToken(size?: number): string
+
+/**
+ * Generate a prefixed API key, e.g. 'nope_live_<token>'.
+ * Body is generated via {@link secureToken}. Store HASHED API keys.
+ * @param prefix - Brand/scope prefix (default 'nope_live'). Must be non-empty
+ *                 and contain no whitespace; everything else is up to you.
+ * @param size - Body length in characters (default 40, min 32)
+ */
+export function apiKey(prefix?: string, size?: number): string
+
+/** Options for {@link defineToken} */
+export interface DefineTokenOptions {
+  /** Body length (default 40, min 32) */
+  size?: number
+  /** Separator between prefix and body (default '_') */
+  separator?: string
+}
+
+/** A typed prefixed-token helper returned by {@link defineToken} (assumes '_' separator for its template-literal type) */
+export interface TypedToken<P extends string> {
+  /** Generate a new prefixed token of the form `${P}_${string}` */
+  generate(): `${P}_${string}`
+  /** Type guard: narrows value to `${P}_${string}` when true */
+  is(value: unknown): value is `${P}_${string}`
+  /** Parse into { prefix, token } or null if it does not match */
+  parse(value: string): { prefix: P; token: string } | null
+}
+
+/**
+ * Define a typed prefixed-token helper (Stripe-style), e.g. defineToken('sk_live').
+ * The body is produced by {@link secureToken} (unpooled, ephemeral); the alphabet
+ * is fixed to the URL-safe 64-char set for stability of security primitives.
+ */
+export function defineToken<P extends string>(prefix: P, options?: DefineTokenOptions): TypedToken<P>
+
+/** Components extracted from an orderedId() by {@link OrderedId.parse} */
+export interface OrderedIdParts {
+  /** Creation time (millisecond precision) */
+  timestamp: Date
+  /** Same-millisecond sequence counter (0..58^5-1) */
+  counter: number
+  /** The 8-char random tail */
+  random: string
+}
+
+/** orderedId() — fixed 21-char Base58, sortable, strictly monotonic */
+export interface OrderedId {
+  /** Generate a 21-char Base58 ID. Strictly monotonic; safe across clock rewinds. */
+  (): string
+  /**
+   * 21-byte ASCII representation of a fresh orderedId() — Base58 char codes in
+   * latin1, one byte per character. NOT a packed binary form (Base58 does not
+   * pack cleanly into bytes); a compact toBytes/fromBytes pair is planned for v2.1.
+   */
+  asciiBytes(): Uint8Array
+  /** Parse a 21-char orderedId into its components. Throws on invalid input. */
+  parse(id: string): OrderedIdParts
+}
+
+/**
+ * Sortable, strictly-monotonic 21-char Base58 ID. Layout: 8 ts + 5 counter + 8 random.
+ * Lexicographic sort matches creation order. Clock rewinds are clamped; counter
+ * overflow bumps the synthetic clock forward by 1 ms with no busy-wait.
+ *
+ * Not a bearer secret — the timestamp prefix reveals creation time. For secrets
+ * use {@link secureToken} or {@link apiKey}.
+ */
+export const orderedId: OrderedId
 
 export default nopeid
