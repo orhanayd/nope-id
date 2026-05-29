@@ -1195,19 +1195,14 @@ const incrementCounterHead = () => {
   seedCounter()
 }
 
-/**
- * Generate a sortable, strictly-monotonic 21-char Base58 ID.
- * Layout: 8 ts + 5 counter + 8 random. Lexicographic sort matches creation order.
- *
- * Invariants:
- *  - Strict monotonic (b > a) within and across milliseconds.
- *  - Clock rewind (Date.now() goes backwards) is clamped — never emits a
- *    timestamp prefix smaller than one already returned.
- *  - Same-ms counter overflow is handled by a synthetic +1 ms bump. No
- *    busy-wait loop, no recursion, no event-loop block.
- */
-export const orderedId = () => {
-  const ms = Date.now()
+// nextOrderedIdWithMs(ms) is the core hot path, parameterized on the wall clock.
+// orderedId() passes a fresh Date.now() on every call, so the embedded timestamp
+// is accurate to the call. orderedId.many() passes one clock read per batch
+// (refreshed every 4096 IDs), amortizing Date.now() across the batch with no
+// background timer and no change to the per-call path. Both entry points share
+// the module-level cache state below, so a many() batch leaves the generator
+// strictly monotonic for any orderedId() that follows.
+const nextOrderedIdWithMs = ms => {
   // Clock rewind is handled implicitly: when ms <= timestampCacheMs (whether
   // because the clock went backwards or because we're still in the same ms),
   // we fall to the else branch, advance the counter, and reuse the cached
@@ -1244,6 +1239,19 @@ export const orderedId = () => {
          String.fromCharCode(counterTailCharCode) +
          orderedRndPoolStr.substring(pos, pos + ORDERED_RND_LEN)
 }
+
+/**
+ * Generate a sortable, strictly-monotonic 21-char Base58 ID.
+ * Layout: 8 ts + 5 counter + 8 random. Lexicographic sort matches creation order.
+ *
+ * Invariants:
+ *  - Strict monotonic (b > a) within and across milliseconds.
+ *  - Clock rewind (Date.now() goes backwards) is clamped — never emits a
+ *    timestamp prefix smaller than one already returned.
+ *  - Same-ms counter overflow is handled by a synthetic +1 ms bump. No
+ *    busy-wait loop, no recursion, no event-loop block.
+ */
+export const orderedId = () => nextOrderedIdWithMs(Date.now())
 
 /**
  * 21-byte ASCII representation of a fresh orderedId() — Base58 char codes in
@@ -1285,6 +1293,42 @@ orderedId.parse = id => {
     counter: ctr,
     random: id.slice(ORDERED_TS_LEN + ORDERED_CTR_LEN),
   }
+}
+
+// Upper bound on a single orderedId.many() request. Same rationale as
+// GENERATE_MANY_MAX: the result is one Array, and past ~1M entries you want a
+// stream, not a megabyte-scale array held live in young-gen.
+const ORDERED_MANY_MAX = 1_000_000
+
+/**
+ * Generate `count` strictly-monotonic, sortable orderedId()s as an Array.
+ *
+ * Reads the wall clock once at the start of the batch, then only every 4096
+ * IDs, so the per-call Date.now() cost is amortized across the whole batch with
+ * NO background timer and NO change to the default orderedId() path. IDs within
+ * a batch are separated by the strictly-incrementing counter, so the result is
+ * strictly monotonic and sorts in creation order. Because the clock is sampled
+ * at most once per 4096 IDs, an embedded timestamp may lag real time by however
+ * long it takes to emit up to 4096 IDs (sub-millisecond in practice); ordering
+ * is always exact. Shares state with orderedId(), so a following orderedId()
+ * continues monotonically from where the batch left off.
+ *
+ * @param {number} count  Number of IDs. count <= 0 returns []; count > 1,000,000 throws.
+ * @returns {string[]}
+ */
+orderedId.many = count => {
+  count |= 0
+  if (count <= 0) return []
+  if (count > ORDERED_MANY_MAX) {
+    throw new Error(`orderedId.many count exceeds maximum (${ORDERED_MANY_MAX})`)
+  }
+  const out = new Array(count)
+  let ms = Date.now()
+  for (let i = 0; i < count; i++) {
+    if ((i & 4095) === 4095) ms = Date.now()
+    out[i] = nextOrderedIdWithMs(ms)
+  }
+  return out
 }
 
 // === Format validators ===

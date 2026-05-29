@@ -98,6 +98,66 @@ describe('orderedId() — asciiBytes', () => {
   })
 })
 
+describe('orderedId.many() — batch', () => {
+  test('returns exactly count IDs, all 21-char Base58, all distinct', () => {
+    const ids = orderedId.many(5000)
+    assert.equal(ids.length, 5000)
+    const seen = new Set()
+    for (const id of ids) {
+      assert.equal(id.length, 21)
+      assert.match(id, BASE58_RE)
+      seen.add(id)
+    }
+    assert.equal(seen.size, 5000)
+  })
+
+  test('batch is strictly increasing (sorts in creation order)', () => {
+    const ids = orderedId.many(5000)
+    for (let i = 1; i < ids.length; i++) {
+      assert.ok(ids[i] > ids[i - 1], `${ids[i - 1]} < ${ids[i]} expected`)
+    }
+  })
+
+  test('stays strictly monotonic across the 4096-ID clock-refresh boundary', () => {
+    // > 4096 forces at least one mid-batch Date.now() refresh; the counter must
+    // carry ordering across that boundary with no duplicate or inversion.
+    const ids = orderedId.many(10000)
+    for (let i = 1; i < ids.length; i++) {
+      assert.ok(ids[i] > ids[i - 1])
+    }
+  })
+
+  test('shares state with orderedId(): interleaving stays monotonic', () => {
+    const a = orderedId()
+    const batch = orderedId.many(1000)
+    const b = orderedId()
+    assert.ok(batch[0] > a, 'first batch ID > prior single ID')
+    assert.ok(b > batch[batch.length - 1], 'single ID after batch > last batch ID')
+  })
+
+  test('parsed timestamps are non-decreasing and within batch wall-clock window', () => {
+    const before = Date.now()
+    const ids = orderedId.many(20000)
+    const after = Date.now()
+    let last = 0
+    for (const id of ids) {
+      const ts = orderedId.parse(id).timestamp.getTime()
+      assert.ok(ts >= last, 'timestamps non-decreasing within batch')
+      last = ts
+      // Clock is sampled at batch start + every 4096 IDs, so each embedded ts is
+      // a Date.now() read taken during the call; allow 2 ms slack at the edges.
+      assert.ok(ts >= before - 2 && ts <= after + 2, `ts ${ts} within [${before},${after}]`)
+    }
+  })
+
+  test('count edge cases: <= 0 returns [], over the cap throws', () => {
+    assert.equal(orderedId.many(0).length, 0)
+    assert.equal(orderedId.many(-5).length, 0)
+    assert.equal(orderedId.many(1).length, 1)
+    assert.throws(() => orderedId.many(1_000_001))
+  })
+})
+
 export default runTests
 
 // Auto-run when executed directly. No-op when imported by tests/index.js.

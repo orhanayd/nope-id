@@ -1035,8 +1035,12 @@ const incrementCounterHead = () => {
   seedCounter()
 }
 
-const orderedId = () => {
-  const ms = Date.now()
+// nextOrderedIdWithMs(ms) is the core hot path, parameterized on the wall clock.
+// orderedId() passes a fresh Date.now() per call (timestamp accurate to the
+// call); orderedId.many() passes one clock read per batch (refreshed every 4096
+// IDs) to amortize Date.now() with no background timer. Shared module state, so
+// a many() batch leaves the generator monotonic for the next orderedId().
+const nextOrderedIdWithMs = ms => {
   // Clock rewind is handled implicitly: ms <= timestampCacheMs falls to the
   // else branch (counter advance) and reuses the cached larger prefix.
   if (ms > timestampCacheMs) {
@@ -1062,6 +1066,9 @@ const orderedId = () => {
          String.fromCharCode(counterTailCharCode) +
          orderedRndPoolStr.substring(pos, pos + ORDERED_RND_LEN)
 }
+
+// Sortable, strictly-monotonic 21-char Base58 ID (8 ts + 5 counter + 8 random).
+const orderedId = () => nextOrderedIdWithMs(Date.now())
 
 orderedId.asciiBytes = () => {
   const s = orderedId()
@@ -1093,6 +1100,42 @@ orderedId.parse = id => {
     counter: ctr,
     random: id.slice(ORDERED_TS_LEN + ORDERED_CTR_LEN),
   }
+}
+
+// Upper bound on a single orderedId.many() request. Same rationale as
+// GENERATE_MANY_MAX: the result is one Array, and past ~1M entries you want a
+// stream, not a megabyte-scale array held live in young-gen.
+const ORDERED_MANY_MAX = 1_000_000
+
+/**
+ * Generate `count` strictly-monotonic, sortable orderedId()s as an Array.
+ *
+ * Reads the wall clock once at the start of the batch, then only every 4096
+ * IDs, so the per-call Date.now() cost is amortized across the whole batch with
+ * NO background timer and NO change to the default orderedId() path. IDs within
+ * a batch are separated by the strictly-incrementing counter, so the result is
+ * strictly monotonic and sorts in creation order. Because the clock is sampled
+ * at most once per 4096 IDs, an embedded timestamp may lag real time by however
+ * long it takes to emit up to 4096 IDs (sub-millisecond in practice); ordering
+ * is always exact. Shares state with orderedId(), so a following orderedId()
+ * continues monotonically from where the batch left off.
+ *
+ * @param {number} count  Number of IDs. count <= 0 returns []; count > 1,000,000 throws.
+ * @returns {string[]}
+ */
+orderedId.many = count => {
+  count |= 0
+  if (count <= 0) return []
+  if (count > ORDERED_MANY_MAX) {
+    throw new Error(`orderedId.many count exceeds maximum (${ORDERED_MANY_MAX})`)
+  }
+  const out = new Array(count)
+  let ms = Date.now()
+  for (let i = 0; i < count; i++) {
+    if ((i & 4095) === 4095) ms = Date.now()
+    out[i] = nextOrderedIdWithMs(ms)
+  }
+  return out
 }
 
 // === Format validators ===

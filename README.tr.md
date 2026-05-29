@@ -612,6 +612,129 @@ isValidULID('01ARZ3NDEKTSV4RRFFQ69G5FAV')             // true
 
 ---
 
+## Sıralanabilir, monotonik ID'ler
+
+### `orderedId()`
+
+Sabit formatlı, kesin monotonik, leksikografik olarak sıralanabilir 21 karakterlik Base58 ID. Düzen: 8 zaman damgası + 5 sayaç + 8 rastgele.
+
+[sparkid](https://www.npmjs.com/package/sparkid) ile aynı yapıda, fakat bir karakter daha fazla rastgele entropi (~47 bit, sparkid'in ~41'ine karşı), daha güçlü garantiler (saat geri gidince clamp, sayaç taşmasında busy-wait yerine sentetik zaman ilerletme) ve Node LTS üzerinde ölçüm gürültüsü içinde karşılaştırılabilir throughput sunar.
+
+```javascript
+import { orderedId } from 'nope-id'
+
+orderedId()                                // "1okw67hF111114mDXU1ez"
+
+// Kesin monotonluk NTP düzeltmeleri, container resume vb. durumlarda korunur.
+// Date.now() geri gittiğinde orderedId daha büyük olan cache'lenmiş prefix'i yeniden
+// kullanır ve sayacı ilerletmeye devam eder; sonraki ID yine kesinlikle daha büyüktür.
+orderedId() < orderedId() // true
+
+// Zaman, sayaç ve rastgele kuyruğu geri ayrıştır
+orderedId.parse('1okw67hF111114mDXU1ez')
+// { timestamp: Date, counter: 1, random: '4mDXU1ez' }
+
+// 21 baytlık ASCII gösterimi (latin1 karakter kodları; paketlenmiş binary DEĞİL)
+orderedId.asciiBytes() // Uint8Array(21)
+
+// Toplu üretim: saati batch başına bir kez (ve her 4096 ID'de bir) okur, bu yüzden
+// orderedId()'yi döngüde çağırmaktan ID başına daha hızlıdır. Her zaman kesinlikle artar.
+orderedId.many(1000) // 1000 sıralanabilir ID'lik string[]
+```
+
+**`orderedId()`'yi `sortableId()` yerine ne zaman seçmeli:**
+- Kesin monotoniktir (`b > a`), sadece azalmayan değil.
+- Sayaç taşması, busy-wait döngüsü yerine sentetik bir zaman ilerletmesi yapar.
+- Saat geri gitmesi clamp'lenir; daha önce döndürdüğünden daha küçük bir zaman damgasını asla üretmez.
+- Çıktı her zaman 21 karakterdir; boyut parametresi yok, truncation tuzağı yok.
+
+`sortableId()` artık legacy'dir. Yeni kodda `orderedId()`'yi tercih edin.
+
+**`orderedId.many(count)` ile toplu üretim**
+
+`orderedId.many(count)`, `count` adet kesin monotonik ID'den oluşan bir dizi döndürür. Saati batch'in başında bir kez, sonra yalnızca her 4096 ID'de bir okur; böylece ID başına `Date.now()` maliyeti, hiçbir arka plan timer'ı olmadan ve per-call `orderedId()` yoluna hiç dokunmadan batch geneline yayılır. Sıralama her zaman kesindir (sayaç, aynı milisaniyedeki ID'leri ayırır); gömülü zaman damgası en fazla ~4096 ID üretme süresi kadar gerçek zamanın gerisinde kalabilir (pratikte milisaniyenin altında). Node LTS üzerinde bu, `orderedId()`'yi döngüde çağırmanın kabaca 1.7 katı throughput'tur. `count <= 0` `[]` döndürür; `count > 1_000_000` hata fırlatır.
+
+```javascript
+const ids = orderedId.many(10000) // 10.000 sıralanabilir ID, her 4096'da bir saat okuması
+ids[0] < ids[1] // true (kesinlikle artar)
+```
+
+> orderedId tasarımı gereği sıralanabilirdir; prefix'i oluşturulma zamanını açığa çıkarır. **Bunu bir bearer secret olarak kullanmayın.** Secret'lar için `secureToken()` kullanın.
+
+---
+
+## Güvenli token'lar (bearer secret'lar)
+
+`nopeid()`, throughput için uzun ömürlü, cache'lenmiş bir havuz string'inin substring'lerini döndürür. Bu cache public ID'ler için sorun değildir; ama bearer secret'lar (API key'leri, session token'ları, parola sıfırlama token'ları) için, bir bellek dökümünün henüz talep edilmemiş token'ları açığa çıkarabileceği anlamına gelir. `secureToken` ailesi bu risk sınıfını ortadan kaldırır: her çağrı kendi buffer'ını ayırır, CSPRNG'den doldurur, alfabeye eşler ve geri dönmeden önce ham baytları sıfırlar.
+
+> Döndürülen JavaScript string'inin kendisi sıfırlanamaz; V8 string'leri değişmezdir ve GC heap'inde yaşar. Tehdit modeliniz bellekten temizlenebilir secret'lar gerektiriyorsa, baytları `Buffer`/`Uint8Array` olarak tutun ve asla `.toString()` yapmayın.
+
+### `secureToken(size = 48)`
+
+```javascript
+import { secureToken } from 'nope-id'
+
+secureToken()       // 48 karakterlik URL-safe token (varsayılan)
+secureToken(64)     // 64 karakterlik token
+secureToken(32)     // 32 minimumdur; daha küçüğü hata fırlatır
+```
+
+- URL-safe 64 karakterlik alfabe (`A-Za-z0-9_-`)
+- Bias'sız (`byte & 63`)
+- Gelecek-token cache'i yok; ham baytlar string'e çevrildikten sonra sıfırlanır
+- **Token'ları hash'lenmiş saklayın** (örn. SHA-256), asla ham token'ı değil
+
+### `apiKey(prefix = 'nope_live', size = 40)`
+
+```javascript
+import { apiKey } from 'nope-id'
+
+apiKey()                       // "nope_live_<40 karakter>"
+apiKey('sk_live', 40)          // "sk_live_<40 karakter>"
+apiKey('myapp_test', 32)       // "myapp_test_<32 karakter>"
+```
+
+`secureToken` üzerine ince bir sarmalayıcı: prefix'i doğrular (boş değil, boşluk yok) ve `_` ile birleştirir. İsimlendirme kuralı (Stripe tarzı `sk_live_`, GitHub tarzı `ghp_` vb.) size kalmış.
+
+### `defineToken(prefix, options?)`: tipli güvenli token'lar
+
+Stripe tarzı: bir `generate` / `is` / `parse` üçlüsü; fakat gövde `secureToken`'dan gelir ve alfabe, kararlılık için URL-safe 64 karaktere sabitlenmiştir.
+
+```javascript
+import { defineToken } from 'nope-id'
+
+const SessionToken = defineToken('sess', { size: 48 })
+
+const t = SessionToken.generate()    // "sess_<48 karakter>"
+SessionToken.is(t)                   // true
+SessionToken.parse(t)                // { prefix: 'sess', token: '<48 karakter>' }
+SessionToken.is('sess_short')        // false (uzunluk zorlanır)
+```
+
+---
+
+## Doğru ID'yi seçin
+
+| Kullanım durumu | API | Boyut | Neden |
+|---|---|---|---|
+| Log / request ID | `nopeid(16)` | 16 | En hızlı, havuzlu, public-safe |
+| Public URL ID | `nopeid(21)` | 21 | 126 bit, public ID'ler için gelecek-token sorunu yok |
+| DB object ID | `nopeid(21)` veya `orderedId()` | 21 | Rastgele veya sıralanabilir |
+| Sıralanabilir DB primary key | `orderedId()` | 21 | Leksikografik sıralanabilir, kesin monotonik, B-tree dostu |
+| Davet / doğrulama kodu | `shortId(12)` | 12 | Benzer karakterler yok, kullanıcı yazabilir |
+| API anahtarı | `apiKey('myapp_live', 40)` | önek + 40 | Önekli, havuzsuz, 240+ bit |
+| Oturum token'ı | `secureToken(48)` | 48 | Havuzsuz, geçici |
+| Parola sıfırlama token'ı | `secureToken(48)` | 48 | Tek kullanımlık; saklamadan önce hash'leyin |
+| E-posta doğrulama | `secureToken(40)` | 40 | TTL + tek kullanımlık |
+| Ödeme / yüksek değer | `secureToken(64)` | 64 | Maksimum entropi bütçesi |
+
+Net kural:
+- **Havuzlu, hızlı, public-safe** → `nopeid()` ailesi
+- **Havuzsuz, geçici, sunucu secret'ı** → `secureToken()` ailesi
+- **Zaman-sıralı, monotonik, DB-dostu** → `orderedId()`
+
+---
+
 ## Güvenli Olmayan Versiyon
 
 Kritik olmayan kullanımlar için (UI element ID'leri, geçici anahtarlar vb.), daha hızlı non-secure versiyonu kullanabilirsiniz:
@@ -646,7 +769,7 @@ const id = nopeid()
 
 ```javascript
 // ES Modules
-import { prefixedId, sortableId } from 'nope-id'
+import { prefixedId, orderedId } from 'nope-id'
 
 // Prefix'li ID'lerle user tablosu
 const user = {
@@ -654,15 +777,15 @@ const user = {
   email: 'john@example.com'
 }
 
-// Sortable ID'lerle order'lar (oluşturma zamanına göre otomatik sıralı)
+// Kesin monotonik, sortable ID'lerle order'lar (oluşturma zamanına göre otomatik sıralı)
 const order = {
-  id: sortableId(),  // "01HGW2BBK0QZRMTX12345A"
+  id: orderedId(),  // "1okw67hF111114mDXU1ez"
   userId: user.id,
   total: 99.99
 }
 
 // CommonJS
-const { prefixedId, sortableId } = require('nope-id')
+const { prefixedId, orderedId } = require('nope-id')
 ```
 
 ### API Token Üretimi
@@ -708,7 +831,7 @@ const { slugId, shortId } = require('nope-id')
 
 ```javascript
 // ES Modules
-import { distributedId, sortableId, getFingerprint } from 'nope-id'
+import { distributedId, orderedId, getFingerprint } from 'nope-id'
 
 // Çok-node güvenli ID'ler
 const eventId = distributedId()
@@ -717,15 +840,15 @@ const eventId = distributedId()
 // Node tanımlama ile log
 console.log(`[${getFingerprint()}] Event işleniyor ${eventId}`)
 
-// Sortable ID'lerle zaman-serisi verisi
+// Kesin monotonik, sortable ID'lerle zaman-serisi verisi
 const metric = {
-  id: sortableId(),
+  id: orderedId(),
   timestamp: new Date(),
   value: 42
 }
 
 // CommonJS
-const { distributedId, getFingerprint } = require('nope-id')
+const { distributedId, orderedId, getFingerprint } = require('nope-id')
 ```
 
 ### React / Next.js
@@ -758,7 +881,7 @@ import { nopeid } from 'nope-id/non-secure'
 ```javascript
 // CommonJS
 const express = require('express')
-const { prefixedId, sortableId, uuid } = require('nope-id')
+const { prefixedId, orderedId, uuid } = require('nope-id')
 
 const app = express()
 
@@ -773,7 +896,7 @@ app.post('/users', (req, res) => {
 
 app.post('/orders', (req, res) => {
   const order = {
-    id: sortableId(),  // Oluşturma zamanına göre sıralanabilir
+    id: orderedId(),  // Oluşturma zamanına göre sıralanabilir, kesin monotonik
     ...req.body
   }
   // Order kaydet...

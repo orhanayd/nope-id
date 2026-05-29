@@ -612,6 +612,129 @@ isValidULID('01ARZ3NDEKTSV4RRFFQ69G5FAV')             // true
 
 ---
 
+## Сортируемые, монотонные ID
+
+### `orderedId()`
+
+ID фиксированного формата, строго монотонный, лексикографически сортируемый, 21 символ Base58. Структура: 8 timestamp + 5 счётчик + 8 случайных.
+
+Та же форма, что и у [sparkid](https://www.npmjs.com/package/sparkid), но с одним дополнительным символом случайной энтропии (~47 бит против ~41 у sparkid), более строгими гарантиями (clamp при обратном ходе часов, синтетический сдвиг времени при переполнении счётчика вместо busy-wait) и сопоставимой производительностью в пределах разброса измерений на Node LTS.
+
+```javascript
+import { orderedId } from 'nope-id'
+
+orderedId()                                // "1okw67hF111114mDXU1ez"
+
+// Строгая монотонность сохраняется при NTP-коррекциях, возобновлении контейнера и т.п.
+// Когда Date.now() идёт назад, orderedId переиспользует больший закэшированный префикс
+// и продолжает увеличивать счётчик, поэтому следующий ID всё равно строго больше.
+orderedId() < orderedId() // true
+
+// Разобрать время, счётчик и случайный хвост обратно
+orderedId.parse('1okw67hF111114mDXU1ez')
+// { timestamp: Date, counter: 1, random: '4mDXU1ez' }
+
+// 21-байтное ASCII-представление (коды символов latin1; НЕ упакованный бинарь)
+orderedId.asciiBytes() // Uint8Array(21)
+
+// Пакетная генерация: читает часы один раз на пакет (и каждые 4096 ID), поэтому
+// быстрее в расчёте на один ID, чем вызов orderedId() в цикле. Всегда строго возрастает.
+orderedId.many(1000) // string[] из 1000 сортируемых ID
+```
+
+**Когда выбирать `orderedId()` вместо `sortableId()`:**
+- Он строго монотонен (`b > a`), а не просто неубывающий.
+- При переполнении счётчика делается синтетический сдвиг времени вместо цикла busy-wait.
+- Обратный ход часов ограничивается (clamp); он никогда не выдаёт timestamp меньше уже возвращённого.
+- Вывод всегда 21 символ; нет параметра размера, нет ловушек с усечением.
+
+`sortableId()` теперь legacy. Для нового кода предпочитайте `orderedId()`.
+
+**Пакетная генерация через `orderedId.many(count)`**
+
+`orderedId.many(count)` возвращает массив из `count` строго монотонных ID. Он читает часы один раз в начале пакета и затем только каждые 4096 ID, поэтому стоимость `Date.now()` в расчёте на один ID распределяется по всему пакету без какого-либо фонового таймера и без изменения пути per-call `orderedId()`. Порядок всегда точен (счётчик разделяет ID в пределах одной миллисекунды); встроенный timestamp может отставать от реального времени на время, нужное для генерации до ~4096 ID (на практике меньше миллисекунды). На Node LTS это примерно в 1.7 раза выше throughput, чем вызов `orderedId()` в цикле. `count <= 0` возвращает `[]`; `count > 1_000_000` бросает исключение.
+
+```javascript
+const ids = orderedId.many(10000) // 10 000 сортируемых ID, одно чтение часов на 4096
+ids[0] < ids[1] // true (строго возрастает)
+```
+
+> orderedId сортируем по своей природе; его префикс раскрывает время создания. **Не используйте его как bearer secret.** Для секретов используйте `secureToken()`.
+
+---
+
+## Безопасные токены (bearer secret'ы)
+
+`nopeid()` для производительности возвращает подстроки долгоживущей закэшированной строки-пула. Этот кэш подходит для публичных ID; но для bearer secret'ов (API-ключи, session-токены, токены сброса пароля) он означает, что дамп памяти может раскрыть токены, которые ещё не были запрошены. Семейство `secureToken` устраняет этот класс риска: каждый вызов выделяет собственный буфер, заполняет его из CSPRNG, отображает в алфавит, а затем обнуляет сырые байты перед возвратом.
+
+> Сама возвращаемая строка JavaScript не может быть обнулена; строки V8 неизменяемы и живут в куче GC. Если ваша модель угроз требует очищаемых из памяти секретов, держите байты как `Buffer`/`Uint8Array` и никогда не вызывайте `.toString()`.
+
+### `secureToken(size = 48)`
+
+```javascript
+import { secureToken } from 'nope-id'
+
+secureToken()       // 48-символьный URL-safe токен (по умолчанию)
+secureToken(64)     // 64-символьный токен
+secureToken(32)     // 32 это минимум; меньше бросает исключение
+```
+
+- URL-safe алфавит из 64 символов (`A-Za-z0-9_-`)
+- Без смещения (`byte & 63`)
+- Нет кэша будущих токенов; сырые байты обнуляются после преобразования в строку
+- **Храните токены хэшированными** (например SHA-256), никогда не сырой токен
+
+### `apiKey(prefix = 'nope_live', size = 40)`
+
+```javascript
+import { apiKey } from 'nope-id'
+
+apiKey()                       // "nope_live_<40 символов>"
+apiKey('sk_live', 40)          // "sk_live_<40 символов>"
+apiKey('myapp_test', 32)       // "myapp_test_<32 символа>"
+```
+
+Тонкая обёртка над `secureToken`: проверяет префикс (непустой, без пробелов) и соединяет через `_`. Соглашение об именовании (в стиле Stripe `sk_live_`, в стиле GitHub `ghp_` и т.п.) на ваше усмотрение.
+
+### `defineToken(prefix, options?)`: типизированные безопасные токены
+
+В стиле Stripe: тройка `generate` / `is` / `parse`, но тело берётся из `secureToken`, а алфавит зафиксирован на URL-safe 64 символа для стабильности.
+
+```javascript
+import { defineToken } from 'nope-id'
+
+const SessionToken = defineToken('sess', { size: 48 })
+
+const t = SessionToken.generate()    // "sess_<48 символов>"
+SessionToken.is(t)                   // true
+SessionToken.parse(t)                // { prefix: 'sess', token: '<48 символов>' }
+SessionToken.is('sess_short')        // false (длина проверяется)
+```
+
+---
+
+## Выбор правильного ID
+
+| Сценарий | API | Размер | Почему |
+|---|---|---|---|
+| Log / request ID | `nopeid(16)` | 16 | Самый быстрый, с пулом, безопасен для публичного |
+| Публичный URL ID | `nopeid(21)` | 21 | 126 бит, нет проблемы будущих токенов для публичных ID |
+| DB object ID | `nopeid(21)` или `orderedId()` | 21 | Случайный или сортируемый |
+| Сортируемый первичный ключ БД | `orderedId()` | 21 | Лексикографически сортируемый, строго монотонный, дружелюбен к B-tree |
+| Код приглашения / подтверждения | `shortId(12)` | 12 | Без похожих символов, удобно набирать |
+| API-ключ | `apiKey('myapp_live', 40)` | префикс + 40 | С префиксом, без пула, 240+ бит |
+| Session-токен | `secureToken(48)` | 48 | Без пула, эфемерный |
+| Токен сброса пароля | `secureToken(48)` | 48 | Одноразовый; хэшируйте перед хранением |
+| Подтверждение email | `secureToken(40)` | 40 | TTL + одноразовый |
+| Платёж / высокая ценность | `secureToken(64)` | 64 | Максимальный бюджет энтропии |
+
+Чёткое правило:
+- **С пулом, быстро, безопасно для публичного** → семейство `nopeid()`
+- **Без пула, эфемерный, серверный секрет** → семейство `secureToken()`
+- **Упорядочен по времени, монотонный, дружелюбен к БД** → `orderedId()`
+
+---
+
 ## Небезопасная версия
 
 Для некритичных случаев (UI-идентификаторов, временных ключей и т.п.) можно использовать более быструю небезопасную версию:
@@ -646,7 +769,7 @@ const id = nopeid()
 
 ```javascript
 // ES Modules
-import { prefixedId, sortableId } from 'nope-id'
+import { prefixedId, orderedId } from 'nope-id'
 
 // Таблица пользователей с префиксными ID
 const user = {
@@ -654,15 +777,15 @@ const user = {
   email: 'john@example.com'
 }
 
-// Заказы с сортируемыми ID (автосортировка по времени создания)
+// Заказы со строго монотонными сортируемыми ID (автосортировка по времени создания)
 const order = {
-  id: sortableId(),  // "01HGW2BBK0QZRMTX12345A"
+  id: orderedId(),  // "1okw67hF111114mDXU1ez"
   userId: user.id,
   total: 99.99
 }
 
 // CommonJS
-const { prefixedId, sortableId } = require('nope-id')
+const { prefixedId, orderedId } = require('nope-id')
 ```
 
 ### Генерация API-токенов
@@ -708,7 +831,7 @@ const { slugId, shortId } = require('nope-id')
 
 ```javascript
 // ES Modules
-import { distributedId, sortableId, getFingerprint } from 'nope-id'
+import { distributedId, orderedId, getFingerprint } from 'nope-id'
 
 // ID, безопасные в multi-node
 const eventId = distributedId()
@@ -717,15 +840,15 @@ const eventId = distributedId()
 // Лог с идентификацией узла
 console.log(`[${getFingerprint()}] Обработка события ${eventId}`)
 
-// Временные ряды с сортируемыми ID
+// Временные ряды со строго монотонными сортируемыми ID
 const metric = {
-  id: sortableId(),
+  id: orderedId(),
   timestamp: new Date(),
   value: 42
 }
 
 // CommonJS
-const { distributedId, getFingerprint } = require('nope-id')
+const { distributedId, orderedId, getFingerprint } = require('nope-id')
 ```
 
 ### React / Next.js
@@ -758,7 +881,7 @@ import { nopeid } from 'nope-id/non-secure'
 ```javascript
 // CommonJS
 const express = require('express')
-const { prefixedId, sortableId, uuid } = require('nope-id')
+const { prefixedId, orderedId, uuid } = require('nope-id')
 
 const app = express()
 
@@ -773,7 +896,7 @@ app.post('/users', (req, res) => {
 
 app.post('/orders', (req, res) => {
   const order = {
-    id: sortableId(),  // Сортируемый по времени создания
+    id: orderedId(),  // Сортируемый по времени создания, строго монотонный
     ...req.body
   }
   // Сохранить заказ...

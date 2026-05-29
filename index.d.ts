@@ -416,6 +416,15 @@ export interface OrderedId {
   asciiBytes(): Uint8Array
   /** Parse a 21-char orderedId into its components. Throws on invalid input. */
   parse(id: string): OrderedIdParts
+  /**
+   * Generate `count` strictly-monotonic, sortable IDs as an array. Reads the
+   * wall clock once per batch (and again every 4096 IDs), amortizing Date.now()
+   * across the batch with no background timer and no change to the per-call
+   * orderedId() path. Ordering is always exact; an embedded timestamp may lag
+   * real time by up to the time it takes to emit ~4096 IDs. `count <= 0` returns
+   * `[]`; `count > 1_000_000` throws.
+   */
+  many(count: number): string[]
 }
 
 /**
