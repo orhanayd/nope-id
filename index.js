@@ -1224,14 +1224,13 @@ const nextOrderedIdWithMs = ms => {
     if (nxt) counterTailCharCode = nxt
     else incrementCounterHead()
   }
-  // Build the 9-char suffix as:
-  //   fromCharCode(counterTailCharCode)  →  1-char string for the counter tail
-  //   orderedRndPoolStr.substring(pos, pos + 8)  →  SlicedString for 8 random
-  // Final ID = prefixPlusCounterHead + tail + random  (three-way concat).
-  // V8 flattens the 12+1 left side at kConsStringMinLength, then ConcatStrings
-  // it with the 8-char SlicedString — measured faster than a 9-arg fromCharCode
-  // here, because SlicedString is zero-copy and the right-side substring is
-  // served as an O(1) handle into the pre-built pool string.
+  // Build the 21-char ID = 12-char cached prefix + 1-char counter tail + 8
+  // random chars. The 8-char random substring is copied into a fresh one-byte
+  // SeqString — V8 only returns a zero-copy SlicedString for length >= 13, so
+  // an 8-char slice is a small CopyChars, not a view — and the three operands
+  // are then joined via ConsStrings. This 3-operand form was MEASURED fastest
+  // on Node 22 / V8 13.x: a single 9-arg String.fromCharCode and four other
+  // hot-path variants all tied or regressed in a multi-process A/B against it.
   if (orderedRndPosition + ORDERED_RND_LEN > orderedRndCount) refillRandom()
   const pos = orderedRndPosition
   orderedRndPosition = pos + ORDERED_RND_LEN
@@ -1323,10 +1322,32 @@ orderedId.many = count => {
     throw new Error(`orderedId.many count exceeds maximum (${ORDERED_MANY_MAX})`)
   }
   const out = new Array(count)
-  let ms = Date.now()
-  for (let i = 0; i < count; i++) {
-    if ((i & 4095) === 4095) ms = Date.now()
-    out[i] = nextOrderedIdWithMs(ms)
+  let i = 0
+  while (i < count) {
+    // One clock read per 4096-ID chunk. Within a chunk `ms` is constant, so
+    // only the first ID can advance the timestamp / reseed the counter; every
+    // later ID is provably a same-ms counter bump. We emit the first via the
+    // shared nextOrderedIdWithMs() and inline the same-ms path for the rest,
+    // dropping the per-ID function call and the `ms > timestampCacheMs` branch.
+    // The inlined block mirrors nextOrderedIdWithMs()'s else-branch + build —
+    // keep the two in sync. Measured ~+4% vs calling nextOrderedIdWithMs() per
+    // ID (multi-process A/B, Node 22); the per-call orderedId() path is left
+    // untouched, so it cannot regress.
+    const ms = Date.now()
+    let end = i + 4096
+    if (end > count) end = count
+    out[i++] = nextOrderedIdWithMs(ms)
+    for (; i < end; i++) {
+      const nxt = SUCCESSOR_CC[counterTailCharCode]
+      if (nxt) counterTailCharCode = nxt
+      else incrementCounterHead()
+      if (orderedRndPosition + ORDERED_RND_LEN > orderedRndCount) refillRandom()
+      const pos = orderedRndPosition
+      orderedRndPosition = pos + ORDERED_RND_LEN
+      out[i] = prefixPlusCounterHead +
+               String.fromCharCode(counterTailCharCode) +
+               orderedRndPoolStr.substring(pos, pos + ORDERED_RND_LEN)
+    }
   }
   return out
 }

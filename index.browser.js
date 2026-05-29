@@ -1066,8 +1066,9 @@ const nextOrderedIdWithMs = ms => {
     if (nxt) counterTailCharCode = nxt
     else incrementCounterHead()
   }
-  // 3-operand concat with a SlicedString right side — measured fastest
-  // on Node 22 (V8 13.x). See index.js hot-path comment for details.
+  // 3-operand concat: 12-char prefix + 1-char tail + an 8-char COPIED substring
+  // (V8 copies slices < 13 chars; it is not a zero-copy view). Measured fastest
+  // on Node 22 (V8 13.x) vs a 9-arg fromCharCode + 4 other variants. See index.js.
   if (orderedRndPosition + ORDERED_RND_LEN > orderedRndCount) refillRandom()
   const pos = orderedRndPosition
   orderedRndPosition = pos + ORDERED_RND_LEN
@@ -1139,10 +1140,31 @@ orderedId.many = count => {
     throw new Error(`orderedId.many count exceeds maximum (${ORDERED_MANY_MAX})`)
   }
   const out = new Array(count)
-  let ms = Date.now()
-  for (let i = 0; i < count; i++) {
-    if ((i & 4095) === 4095) ms = Date.now()
-    out[i] = nextOrderedIdWithMs(ms)
+  let i = 0
+  while (i < count) {
+    // One clock read per 4096-ID chunk. Within a chunk `ms` is constant, so
+    // only the first ID can advance the timestamp / reseed the counter; every
+    // later ID is provably a same-ms counter bump. Emit the first via the
+    // shared nextOrderedIdWithMs() and inline the same-ms path for the rest,
+    // dropping the per-ID call + the `ms > timestampCacheMs` branch. The inline
+    // block mirrors nextOrderedIdWithMs()'s else-branch + build — keep in sync.
+    // ~+4% vs per-ID nextOrderedIdWithMs() (multi-process A/B); per-call path
+    // is untouched.
+    const ms = Date.now()
+    let end = i + 4096
+    if (end > count) end = count
+    out[i++] = nextOrderedIdWithMs(ms)
+    for (; i < end; i++) {
+      const nxt = SUCCESSOR_CC[counterTailCharCode]
+      if (nxt) counterTailCharCode = nxt
+      else incrementCounterHead()
+      if (orderedRndPosition + ORDERED_RND_LEN > orderedRndCount) refillRandom()
+      const pos = orderedRndPosition
+      orderedRndPosition = pos + ORDERED_RND_LEN
+      out[i] = prefixPlusCounterHead +
+               String.fromCharCode(counterTailCharCode) +
+               orderedRndPoolStr.substring(pos, pos + ORDERED_RND_LEN)
+    }
   }
   return out
 }

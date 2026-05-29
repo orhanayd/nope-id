@@ -746,7 +746,7 @@ Net rule:
 - `objectId()`, `uuidv7()`, `ulid()`, `snowflake()`, `sqids()` are **structured identifiers**, not bearer secrets — they encode time/sequence/machine-id and must not be used where unguessability matters.
 - `sortableId()` is legacy; prefer `orderedId()` for new code.
 
-> **Benchmarks policy.** A "faster than X" claim against `sparkid`, `nanoid`, `ulid`, etc. is only written into this README if the Benchmarks section measurements on the same machine / Node version / harness back it up. Otherwise we say "comparable performance". `orderedId()` vs `sparkid` on Node 22 sits inside ±1.5% median across 15 best-of-7 trials (`benchmarks/orderedid-vs-sparkid.bench.js`), so the wording is "comparable throughput".
+> **Benchmarks policy.** A "faster than X" claim against `sparkid`, `nanoid`, `ulid`, etc. is only written into this README if the Benchmarks section measurements on the same machine / Node version / harness back it up. Otherwise we say "comparable performance". `orderedId()` vs `sparkid` per-call is a statistical tie on Node 22 (multi-process Welch t-test, `benchmarks/orderedid-vs-sparkid.bench.js`; the winner flips run-to-run because both pay one `Date.now()` per ID, ~60% of the hot path), so the wording is "comparable throughput". The batch path does win measurably: `orderedId.many()` is ~1.75x a `sparkid` loop because it amortizes the clock read.
 
 ---
 
