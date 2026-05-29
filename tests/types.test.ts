@@ -23,6 +23,7 @@ import nopeidDefault, {
   nopeid,
   nopeidAsync,
   objectId,
+  orderedId,
   prefixedId,
   random,
   shortId,
@@ -37,6 +38,7 @@ import nopeidDefault, {
   uuidv7,
   type CollisionInfo,
   type DefineIdOptions,
+  type OrderedIdParts,
   type Sqids,
   type SqidsOptions,
   type SnowflakeOptions,
@@ -111,6 +113,14 @@ const snowSeq: number = snowParts.sequence
 const oid: string = objectId()
 const oidTime: Date = decodeObjectIdTime(oid)
 
+const ord: string = orderedId()
+const ordBatch: string[] = orderedId.many(1000)
+const ordBytes: Uint8Array = orderedId.asciiBytes()
+const ordParts: OrderedIdParts = orderedId.parse(ord)
+const ordTs: Date = ordParts.timestamp
+const ordCtr: number = ordParts.counter
+const ordRnd: string = ordParts.random
+
 const sqidsOpts: SqidsOptions = { alphabet: 'abcdefghij', minLength: 6, blocklist: ['nope'] }
 const sq: Sqids = sqidsFactory(sqidsOpts)
 const sqEnc: string = sq.encode([1, 2, 3])
@@ -146,6 +156,6 @@ void [
   defaultId, id1, id2, empty, hexId, hexId8, customId, bytes, alpha, alphaNum, filename,
   sortable, sortable30, t, userPrefixed, ordPrefixed, many, manyShort, validity, validity2,
   stats64, safe, safeBig, yrs, asyncId, asyncId10, v4, v7, ul, ulSeeded, monoId, monoSeeded,
-  snowId, snowDefault, snowDate, snowSeq, oid, oidTime, sqEnc, sqDec, newUser, isUser,
+  snowId, snowDefault, snowDate, snowSeq, oid, oidTime, ord, ordBatch, ordBytes, ordTs, ordCtr, ordRnd, sqEnc, sqDec, newUser, isUser,
   okUuid, okUuidV7, okUlid, slug, short, dist, dist30, fp,
 ]

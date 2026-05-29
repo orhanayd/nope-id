@@ -227,6 +227,11 @@ describe('objectId()', () => {
     assert.throws(() => decodeObjectIdTime('abc'))
     assert.throws(() => decodeObjectIdTime(null))
   })
+
+  test('decodeObjectIdTime throws on non-hex 24-char input', () => {
+    assert.throws(() => decodeObjectIdTime('z'.repeat(24)), /Invalid ObjectId/)
+    assert.throws(() => decodeObjectIdTime('g'.repeat(24)), /Invalid ObjectId/)
+  })
 })
 
 export default runTests
