@@ -31,6 +31,11 @@ import srs from 'secure-random-string'
 import { uid } from 'uid/secure'
 import { v4 as lukeedUuid } from '@lukeed/uuid'
 import { generateId as sparkidGen } from 'sparkid'
+import { createRequire } from 'node:module'
+
+// Actual installed nanoid version — flows into meta so scripts/update-readme.js
+// can label the comparison tables truthfully instead of hardcoding a version.
+const NANOID_VERSION = createRequire(import.meta.url)('nanoid/package.json').version
 
 const TRIALS = 7
 const TARGET_MS = 120
@@ -48,6 +53,7 @@ const results = {
     platform: process.platform,
     arch: process.arch,
     runner: process.env.GITHUB_ACTIONS ? 'github-actions' : 'local',
+    nanoidVersion: NANOID_VERSION,
   },
   comparison: {},
   uuid: {},
