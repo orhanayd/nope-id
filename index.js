@@ -1,7 +1,7 @@
 // nope-id - Secure, fast, and collision-resistant unique ID generator
 // A better nanoid alternative with extra features
 
-import { webcrypto as crypto } from 'node:crypto'
+import { randomFillSync } from 'node:crypto'
 
 // URL-safe alphabet (optimized for compression)
 export const urlAlphabet =
@@ -73,19 +73,16 @@ const bytesToUuid = b => {
 }
 
 // Pool management for reduced system calls
-// Max pool size is 65536 (crypto.getRandomValues limit)
+// 65536 chars stays the pool ceiling: bigger pool strings cross a V8
+// allocation cliff (superlinear encode/alloc cost) and pay nothing back.
 const POOL_SIZE_MULTIPLIER = 128
 const MAX_POOL_SIZE = 65536
 let pool, poolOffset
 
-// Fill buffer in chunks if larger than MAX_POOL_SIZE
-const fillBuffer = buffer => {
-  const len = buffer.length
-  for (let offset = 0; offset < len; offset += MAX_POOL_SIZE) {
-    const chunk = buffer.subarray(offset, Math.min(offset + MAX_POOL_SIZE, len))
-    crypto.getRandomValues(chunk)
-  }
-}
+// randomFillSync draws from the same OS-seeded CSPRNG as webcrypto's
+// getRandomValues, has no 65536-byte per-call cap (that limit is WebCrypto's),
+// and skips the WebCrypto wrapper overhead — so no chunk loop is needed.
+const fillBuffer = randomFillSync
 
 const fillPool = bytes => {
   if (!pool || pool.length < bytes) {
@@ -101,37 +98,30 @@ const fillPool = bytes => {
 }
 
 // Pre-computed char codes of the URL-safe alphabet, indexed by (byte & 63).
-// Drives both the 8-bit cold path and the 16-bit batch refill table below.
+// Used by secureToken's unpooled byte→char mapping.
 const URL_ALPHABET_CODES = /* @__PURE__ */ Uint8Array.from(urlAlphabet, c => c.charCodeAt(0))
 
-// Dedicated pool for nopeid(): CSPRNG bytes translated in place to alphabet char codes.
-// Each call is then a single Buffer.toString('latin1') — one V8 one-byte string allocation
-// per ID, versus ~21 ConsString allocations from `id += alphabet[...]` per character.
+// Dedicated pool for nopeid(): raw CSPRNG bytes encoded to a URL-safe string in
+// one native toString('base64url') per refill — no JS translate loop at all.
+// base64url's char set is exactly urlAlphabet's set (A-Za-z0-9_-), each char
+// carries 6 uniform bits from the CSPRNG stream, and all 8 bits of every byte
+// are consumed (the old byte&63 mapping discarded 2 bits per byte). Only the
+// internal 6-bit→char mapping ORDER differs from urlAlphabet — statistically
+// irrelevant for uniform random input; the exported urlAlphabet constant and
+// every charset/distribution contract are unchanged.
 // Kept separate from `pool` (raw bytes for random()/customAlphabet()/uuid()/etc.).
-let idPool, idPoolOffset, idPoolView, idPoolCodes16, idPoolStr
+// 49152 raw bytes (divisible by 3, so no padding group ever exists) encode to
+// exactly MAX_POOL_SIZE (65536) pool chars.
+const ID_POOL_RAW_BYTES = 49152
+let idPool, idPoolOffset, idPoolStr
 
 const fillIdPool = () => {
-  if (!idPool) {
-    idPool = Buffer.allocUnsafe(MAX_POOL_SIZE)
-    idPoolView = new Uint16Array(idPool.buffer, idPool.byteOffset, MAX_POOL_SIZE >> 1)
-    // Built lazily on first refill: 64 KiB Uint16Array table maps any 16-bit value
-    // (two random bytes) directly to its two translated alphabet codes, so the refill
-    // loop runs at half the iteration count. The mapping is endian-agnostic because
-    // each output byte still corresponds to its own input byte through URL_ALPHABET_CODES.
-    idPoolCodes16 = new Uint16Array(0x10000)
-    for (let i = 0; i < 0x10000; i++) {
-      idPoolCodes16[i] = (URL_ALPHABET_CODES[(i >> 8) & 63] << 8) | URL_ALPHABET_CODES[i & 63]
-    }
-  }
+  if (!idPool) idPool = Buffer.allocUnsafe(ID_POOL_RAW_BYTES)
   fillBuffer(idPool)
-  const view = idPoolView
-  const table = idPoolCodes16
-  for (let i = 0; i < view.length; i++) view[i] = table[view[i]]
-  // Pay V8's Buffer.toString fixed cost once per refill, not once per call.
+  // Pay the encode + string allocation once per refill, not once per call.
   // The hot path then returns idPoolStr.substring(a,b): a SlicedString (O(1),
-  // zero-copy) for sizes ≥ 13, and a ~10 ns inline copy below that — both well
-  // under Buffer.toString's ~50 ns fixed overhead that used to dominate sizes 2–9.
-  idPoolStr = idPool.toString('latin1')
+  // zero-copy) for sizes ≥ 13, and a ~10 ns inline copy below that.
+  idPoolStr = idPool.toString('base64url')
   idPoolOffset = 0
 }
 
@@ -303,13 +293,18 @@ export const customAlphabet = (alphabet, defaultSize = 21) => {
 export const nopeid = (size = 21) => {
   size |= 0
   if (size <= 0) return ''
-  // Cold path: requested size exceeds the pool. Translate one-shot so we don't
-  // distort pool sizing (and don't repeatedly refill mid-request).
+  // Cold path: requested size exceeds the pool. Encode in 49152-byte slices
+  // (each a whole number of 3-byte groups → every char uniform over 64; large
+  // single encodes also hit V8's superlinear big-string penalty). The final
+  // slice keeps a prefix of full-group chars only, so uniformity holds.
   if (size > MAX_POOL_SIZE) {
-    const raw = Buffer.allocUnsafe(size)
-    fillBuffer(raw)
-    for (let i = 0; i < size; i++) raw[i] = URL_ALPHABET_CODES[raw[i] & 63]
-    return raw.toString('latin1')
+    const raw = Buffer.allocUnsafe(ID_POOL_RAW_BYTES)
+    let out = ''
+    while (out.length < size) {
+      fillBuffer(raw)
+      out += raw.toString('base64url')
+    }
+    return out.length > size ? out.slice(0, size) : out
   }
   if (!idPool || idPoolOffset + size > MAX_POOL_SIZE) fillIdPool()
   const start = idPoolOffset

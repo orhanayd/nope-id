@@ -572,6 +572,28 @@ describe('Boundary Tests', () => {
     }
   })
 
+  test('cold path (size > pool) with non-multiple-of-4 size: exact length, charset, distribution', () => {
+    // 100001 chars forces the >MAX_POOL_SIZE cold path AND a trailing partial
+    // encode group boundary. Every char must come from a full 3-byte group —
+    // a padding/partial-group bug would skew the tail chars' distribution.
+    const id = nopeid(100001)
+    assert.equal(id.length, 100001)
+    assert.notOk(id.includes('='), 'base64url output must never contain padding')
+    const counts = new Map()
+    for (const char of id) {
+      assert.ok(urlAlphabet.includes(char), `Unexpected char: ${char}`)
+      counts.set(char, (counts.get(char) || 0) + 1)
+    }
+    assert.equal(counts.size, 64, 'cold path must use all 64 alphabet chars')
+    // ~1562 expected per char; ±30% tolerance mirrors the pooled-path gate
+    const expected = 100001 / 64
+    let outliers = 0
+    for (const n of counts.values()) {
+      if (Math.abs(n - expected) > expected * 0.3) outliers++
+    }
+    assert.lessThan(outliers, 4, 'cold path char distribution must stay uniform')
+  })
+
   test('handles size = 0', () => {
     assert.equal(nopeid(0), '')
   })
