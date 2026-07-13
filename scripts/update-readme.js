@@ -36,6 +36,11 @@ const reqComparison = ['basic_21', 'small_10', 'large_64', 'custom_alphabet', 'b
 for (const k of reqComparison) {
   if (!bench.comparison[k]) throw new Error(`bench.json missing comparison.${k}`)
 }
+// The comparison tables label the competitor with its real installed version
+// (benchmark.js emits it) — a stale bench.json must fail loudly, not print
+// a wrong or undefined version into three READMEs.
+if (!bench.meta.nanoidVersion) throw new Error('bench.json missing meta.nanoidVersion')
+const nanoidLabel = `nanoid ${bench.meta.nanoidVersion}`
 
 // === Formatting helpers (locale-agnostic) ===
 
@@ -61,14 +66,14 @@ const L = {
   en: {
     perfAnchor: 'performance',
     range: (lo, hi) => lo === hi ? `~${lo}x` : `${lo}x to ${hi}x`,
-    headline: range =>
-      `- **Faster** - ${range} faster than nanoid (CSPRNG, full URL-safe alphabet); wins all 5 core benchmarks ([see benchmarks](#performance))`,
+    headline: (range, wins = 5) =>
+      `- **Faster** - ${range} faster than nanoid (CSPRNG, full URL-safe alphabet); wins ${wins === 5 ? 'all 5' : `${wins} of 5`} core benchmarks ([see benchmarks](#performance))`,
     meta: (date, node, runner) => `_Last refreshed: ${date}, Node ${node}, ${runner}._`,
     runnerCI: 'ubuntu-latest (GitHub Actions)',
     runnerLocal: (p, a) => `${p}/${a} (local)`,
     fmtOpsSec: n => fmtOps(n) + ' ops/sec',
     tCompare: {
-      head: ['Test', 'nanoid 5.1.11', 'nope-id', 'Winner'],
+      head: ['Test', '{nanoid}', 'nope-id', 'Winner'],
       sep:  ['------', '--------', '---------', '--------'],
       rowLabels: {
         basic_21: 'Basic (21 chars)',
@@ -128,14 +133,14 @@ const L = {
   tr: {
     perfAnchor: 'performans',
     range: (lo, hi) => lo === hi ? `~${lo}x` : `${lo}x ila ${hi}x`,
-    headline: range =>
-      `- **Daha Hızlı** - nanoid'den ${range} daha hızlı (CSPRNG, tam URL-safe alfabe); 5 temel benchmark'ın hepsini kazanıyor ([benchmark'lara bak](#performans))`,
+    headline: (range, wins = 5) =>
+      `- **Daha Hızlı** - nanoid'den ${range} daha hızlı (CSPRNG, tam URL-safe alfabe); 5 temel benchmark'ın ${wins === 5 ? 'hepsini' : `${wins} tanesini`} kazanıyor ([benchmark'lara bak](#performans))`,
     meta: (date, node, runner) => `_Son güncelleme: ${date}, Node ${node}, ${runner}._`,
     runnerCI: 'ubuntu-latest (GitHub Actions)',
     runnerLocal: (p, a) => `${p}/${a} (yerel)`,
     fmtOpsSec: n => fmtOps(n) + ' op/sn',
     tCompare: {
-      head: ['Test', 'nanoid 5.1.11', 'nope-id', 'Kazanan'],
+      head: ['Test', '{nanoid}', 'nope-id', 'Kazanan'],
       sep:  ['------', '--------', '---------', '--------'],
       rowLabels: {
         basic_21: 'Temel (21 karakter)',
@@ -193,14 +198,14 @@ const L = {
   ru: {
     perfAnchor: 'производительность',
     range: (lo, hi) => lo === hi ? `~${lo} раз` : `${lo}–${hi} раз`,
-    headline: range =>
-      `- **Быстрее** - в ${range} быстрее nanoid (CSPRNG, полный URL-безопасный алфавит); выигрывает все 5 основных бенчмарков ([см. бенчмарки](#производительность))`,
+    headline: (range, wins = 5) =>
+      `- **Быстрее** - в ${range} быстрее nanoid (CSPRNG, полный URL-безопасный алфавит); выигрывает ${wins === 5 ? 'все 5' : `${wins} из 5`} основных бенчмарков ([см. бенчмарки](#производительность))`,
     meta: (date, node, runner) => `_Последнее обновление: ${date}, Node ${node}, ${runner}._`,
     runnerCI: 'ubuntu-latest (GitHub Actions)',
     runnerLocal: (p, a) => `${p}/${a} (локально)`,
     fmtOpsSec: n => fmtOps(n) + ' оп/сек',
     tCompare: {
-      head: ['Тест', 'nanoid 5.1.11', 'nope-id', 'Победитель'],
+      head: ['Тест', '{nanoid}', 'nope-id', 'Победитель'],
       sep:  ['------', '--------', '---------', '--------'],
       rowLabels: {
         basic_21: 'Базовый (21 символ)',
@@ -284,21 +289,26 @@ const refresh = (filePath, loc) => {
   const replaceRegion = mkReplace(readme)
 
   // === Headline range (e.g. "5x to 8x") ===
-  // Build "Nx to Mx" from the spread of comparison ratios. Clamp the floor at 2x
-  // so we never display "1x" (which would read as "same speed").
+  // Build "Nx to Mx" from the spread of comparison ratios. Honesty policy
+  // (CHANGELOG 1.4.0 "Benchmarks policy"): never clamp or round a bound UP —
+  // a sub-1.75x floor is shown with one decimal ("~1.6x"), not inflated to
+  // "2x". The wins count is computed from the data, so "wins all 5" can never
+  // outlive a row that nanoid actually wins.
   const ratios = Object.values(bench.comparison).map(c => c.ratio)
   const minR = Math.min(...ratios)
   const maxR = Math.max(...ratios)
-  const lo = Math.max(2, Math.round(minR))
-  const hi = Math.max(lo, Math.round(maxR))
+  const fmtBound = r => r >= 1.75 ? String(Math.round(r)) : (Math.floor(r * 10) / 10).toFixed(1)
+  const lo = fmtBound(minR)
+  const hi = fmtBound(Math.max(minR, maxR))
+  const wins = ratios.filter(r => r > 1).length
   const localizedRange = loc.range(lo, hi)
-  replaceRegion('headline', loc.headline(localizedRange))
+  replaceRegion('headline', loc.headline(localizedRange, wins))
 
   // === Main comparison table ===
   {
     const rows = Object.keys(loc.tCompare.rowLabels).map(k => [loc.tCompare.rowLabels[k], bench.comparison[k]])
     const lines = [
-      '| ' + loc.tCompare.head.join(' | ') + ' |',
+      '| ' + loc.tCompare.head.map(h => h.replace('{nanoid}', nanoidLabel)).join(' | ') + ' |',
       '|' + loc.tCompare.sep.join('|') + '|',
     ]
     for (const [name, r] of rows) {

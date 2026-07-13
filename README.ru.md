@@ -7,16 +7,16 @@
 **Более быстрая и безопасная альтернатива nanoid с дополнительными возможностями!**
 
 <!-- bench:headline:start -->
-- **Быстрее** - в 3–9 раз быстрее nanoid (CSPRNG, полный URL-безопасный алфавит); выигрывает все 5 основных бенчмарков ([см. бенчмарки](#производительность))
+- **Быстрее** - в 1.4–3 раз быстрее nanoid (CSPRNG, полный URL-безопасный алфавит); выигрывает все 5 основных бенчмарков ([см. бенчмарки](#производительность))
 <!-- bench:headline:end -->
-- **Усиленная безопасность** - Защита от timing-атак, устранение modulo bias, защита от prototype pollution ([безопасность](#безопасность))
-- **Хорошо протестирован** - 307 тестов, включая тесты безопасности и энтропии ([тестирование](#тестирование))
+- **Усиленная безопасность** - Валидаторы с уменьшенной утечкой по времени, устранение modulo bias, защита от prototype pollution ([безопасность](#безопасность))
+- **Хорошо протестирован** - 380 тестов, включая тесты безопасности и энтропии ([тестирование](#тестирование))
 - **Криптографически безопасный** - Использует `webcrypto.getRandomValues()` (CSPRNG)
 - **Без зависимостей** - Никаких внешних зависимостей
 - **URL-безопасный** - Использует символы `A-Za-z0-9_-`
 - **Двойной модуль** - Работает и с ESM (`import`), и с CommonJS (`require`)
 - **TypeScript** - Полные типы включены
-- **Устойчив к коллизиям** - Монотонные сортируемые ID, ID, безопасные для распределённых систем
+- **Устойчив к коллизиям** - Строго монотонные сортируемые ID, ID с меткой источника для распределённых систем
 - **Множество форматов ID** - UUID v4 и **v7**, **ULID** (соответствие спецификации + монотонная фабрика), **Snowflake**, **MongoDB ObjectId**
 - **Дополнительные возможности** - ID с префиксом, сортируемые ID, **Sqids** (обратимое кодирование), **типизированные ID**, валидаторы форматов и многое другое!
 
@@ -389,7 +389,7 @@ const fingerprint = getFingerprint()
 
 #### `distributedId(size = 25)`
 
-Генерирует безопасный для распределённой системы ID с fingerprint процесса. Идеально для multi-node окружений!
+Генерирует ID с префиксом-fingerprint процесса. Полезен для отслеживания источника ID в многопроцессных / многоузловых системах. Защита от коллизий обеспечивается случайным хвостом, поэтому `size` должен оставлять место для него (минимум 16; меньшие значения вызывают ошибку).
 
 **Формат:** `fingerprint_randomPart`
 
@@ -399,8 +399,9 @@ import { distributedId, getFingerprint } from 'nope-id'
 
 distributedId()   // "aB3x_V1StGXR8_Z5jdHi6B" (25 символов)
 distributedId(30) // "aB3x_V1StGXR8_Z5jdHi6B-myT1" (30 символов)
+distributedId(8)  // вызывает ошибку — size должен быть не менее 16
 
-// В распределённой системе каждый узел генерирует ID со своим fingerprint
+// В многопроцессной / многоузловой системе каждый источник имеет свой fingerprint
 // Node 1: "aB3x_V1StGXR8_Z5jdHi6B"
 // Node 2: "kL9m_IRFa-VaY2bKwxyz12"
 // Node 3: "pQ7r_Z5jdHi6B-myTV1St8"
@@ -455,7 +456,7 @@ console.log(info)
 // {
 //   totalPossible: 9007199254740991,   // ограничено MAX_SAFE_INTEGER (для точного значения используйте totalPossibleBigInt)
 //   totalPossibleBigInt: 85070591730234615865843651857942052864n, // 64^21 ≈ 8.5e37
-//   probabilityForBillion: 0,          // ~5.9e-21, округляется до 0 в double precision
+//   probabilityForBillion: 5.877471748233966e-21, // точно вычислено через Math.expm1
 //   safeCount: 1.086e+19,              // ~50% коллизия после генерации такого количества ID
 //   yearsFor1Percent: 4.133e+7         // лет при 1 ID/мс до 1% коллизий
 // }
@@ -611,6 +612,129 @@ isValidULID('01ARZ3NDEKTSV4RRFFQ69G5FAV')             // true
 
 ---
 
+## Сортируемые, монотонные ID
+
+### `orderedId()`
+
+ID фиксированного формата, строго монотонный, лексикографически сортируемый, 21 символ Base58. Структура: 8 timestamp + 5 счётчик + 8 случайных.
+
+Та же форма, что и у [sparkid](https://www.npmjs.com/package/sparkid), но с одним дополнительным символом случайной энтропии (~47 бит против ~41 у sparkid), более строгими гарантиями (clamp при обратном ходе часов, синтетический сдвиг времени при переполнении счётчика вместо busy-wait) и сопоставимой производительностью в пределах разброса измерений на Node LTS.
+
+```javascript
+import { orderedId } from 'nope-id'
+
+orderedId()                                // "1okw67hF111114mDXU1ez"
+
+// Строгая монотонность сохраняется при NTP-коррекциях, возобновлении контейнера и т.п.
+// Когда Date.now() идёт назад, orderedId переиспользует больший закэшированный префикс
+// и продолжает увеличивать счётчик, поэтому следующий ID всё равно строго больше.
+orderedId() < orderedId() // true
+
+// Разобрать время, счётчик и случайный хвост обратно
+orderedId.parse('1okw67hF111114mDXU1ez')
+// { timestamp: Date, counter: 1, random: '4mDXU1ez' }
+
+// 21-байтное ASCII-представление (коды символов latin1; НЕ упакованный бинарь)
+orderedId.asciiBytes() // Uint8Array(21)
+
+// Пакетная генерация: читает часы один раз на пакет (и каждые 4096 ID), поэтому
+// быстрее в расчёте на один ID, чем вызов orderedId() в цикле. Всегда строго возрастает.
+orderedId.many(1000) // string[] из 1000 сортируемых ID
+```
+
+**Когда выбирать `orderedId()` вместо `sortableId()`:**
+- Он строго монотонен (`b > a`), а не просто неубывающий.
+- При переполнении счётчика делается синтетический сдвиг времени вместо цикла busy-wait.
+- Обратный ход часов ограничивается (clamp); он никогда не выдаёт timestamp меньше уже возвращённого.
+- Вывод всегда 21 символ; нет параметра размера, нет ловушек с усечением.
+
+`sortableId()` теперь legacy. Для нового кода предпочитайте `orderedId()`.
+
+**Пакетная генерация через `orderedId.many(count)`**
+
+`orderedId.many(count)` возвращает массив из `count` строго монотонных ID. Он читает часы один раз в начале пакета и затем только каждые 4096 ID, поэтому стоимость `Date.now()` в расчёте на один ID распределяется по всему пакету без какого-либо фонового таймера и без изменения пути per-call `orderedId()`. Порядок всегда точен (счётчик разделяет ID в пределах одной миллисекунды); встроенный timestamp может отставать от реального времени на время, нужное для генерации до ~4096 ID (на практике меньше миллисекунды). На Node LTS это примерно в 1.7 раза выше throughput, чем вызов `orderedId()` в цикле. `count <= 0` возвращает `[]`; `count > 1_000_000` бросает исключение.
+
+```javascript
+const ids = orderedId.many(10000) // 10 000 сортируемых ID, одно чтение часов на 4096
+ids[0] < ids[1] // true (строго возрастает)
+```
+
+> orderedId сортируем по своей природе; его префикс раскрывает время создания. **Не используйте его как bearer secret.** Для секретов используйте `secureToken()`.
+
+---
+
+## Безопасные токены (bearer secret'ы)
+
+`nopeid()` для производительности возвращает подстроки долгоживущей закэшированной строки-пула. Этот кэш подходит для публичных ID; но для bearer secret'ов (API-ключи, session-токены, токены сброса пароля) он означает, что дамп памяти может раскрыть токены, которые ещё не были запрошены. Семейство `secureToken` устраняет этот класс риска: каждый вызов выделяет собственный буфер, заполняет его из CSPRNG, отображает в алфавит, а затем обнуляет сырые байты перед возвратом.
+
+> Сама возвращаемая строка JavaScript не может быть обнулена; строки V8 неизменяемы и живут в куче GC. Если ваша модель угроз требует очищаемых из памяти секретов, держите байты как `Buffer`/`Uint8Array` и никогда не вызывайте `.toString()`.
+
+### `secureToken(size = 48)`
+
+```javascript
+import { secureToken } from 'nope-id'
+
+secureToken()       // 48-символьный URL-safe токен (по умолчанию)
+secureToken(64)     // 64-символьный токен
+secureToken(32)     // 32 это минимум; меньше бросает исключение
+```
+
+- URL-safe алфавит из 64 символов (`A-Za-z0-9_-`)
+- Без смещения (`byte & 63`)
+- Нет кэша будущих токенов; сырые байты обнуляются после преобразования в строку
+- **Храните токены хэшированными** (например SHA-256), никогда не сырой токен
+
+### `apiKey(prefix = 'nope_live', size = 40)`
+
+```javascript
+import { apiKey } from 'nope-id'
+
+apiKey()                       // "nope_live_<40 символов>"
+apiKey('sk_live', 40)          // "sk_live_<40 символов>"
+apiKey('myapp_test', 32)       // "myapp_test_<32 символа>"
+```
+
+Тонкая обёртка над `secureToken`: проверяет префикс (непустой, без пробелов) и соединяет через `_`. Соглашение об именовании (в стиле Stripe `sk_live_`, в стиле GitHub `ghp_` и т.п.) на ваше усмотрение.
+
+### `defineToken(prefix, options?)`: типизированные безопасные токены
+
+В стиле Stripe: тройка `generate` / `is` / `parse`, но тело берётся из `secureToken`, а алфавит зафиксирован на URL-safe 64 символа для стабильности.
+
+```javascript
+import { defineToken } from 'nope-id'
+
+const SessionToken = defineToken('sess', { size: 48 })
+
+const t = SessionToken.generate()    // "sess_<48 символов>"
+SessionToken.is(t)                   // true
+SessionToken.parse(t)                // { prefix: 'sess', token: '<48 символов>' }
+SessionToken.is('sess_short')        // false (длина проверяется)
+```
+
+---
+
+## Выбор правильного ID
+
+| Сценарий | API | Размер | Почему |
+|---|---|---|---|
+| Log / request ID | `nopeid(16)` | 16 | Самый быстрый, с пулом, безопасен для публичного |
+| Публичный URL ID | `nopeid(21)` | 21 | 126 бит, нет проблемы будущих токенов для публичных ID |
+| DB object ID | `nopeid(21)` или `orderedId()` | 21 | Случайный или сортируемый |
+| Сортируемый первичный ключ БД | `orderedId()` | 21 | Лексикографически сортируемый, строго монотонный, дружелюбен к B-tree |
+| Код приглашения / подтверждения | `shortId(12)` | 12 | Без похожих символов, удобно набирать |
+| API-ключ | `apiKey('myapp_live', 40)` | префикс + 40 | С префиксом, без пула, 240+ бит |
+| Session-токен | `secureToken(48)` | 48 | Без пула, эфемерный |
+| Токен сброса пароля | `secureToken(48)` | 48 | Одноразовый; хэшируйте перед хранением |
+| Подтверждение email | `secureToken(40)` | 40 | TTL + одноразовый |
+| Платёж / высокая ценность | `secureToken(64)` | 64 | Максимальный бюджет энтропии |
+
+Чёткое правило:
+- **С пулом, быстро, безопасно для публичного** → семейство `nopeid()`
+- **Без пула, эфемерный, серверный секрет** → семейство `secureToken()`
+- **Упорядочен по времени, монотонный, дружелюбен к БД** → `orderedId()`
+
+---
+
 ## Небезопасная версия
 
 Для некритичных случаев (UI-идентификаторов, временных ключей и т.п.) можно использовать более быструю небезопасную версию:
@@ -645,7 +769,7 @@ const id = nopeid()
 
 ```javascript
 // ES Modules
-import { prefixedId, sortableId } from 'nope-id'
+import { prefixedId, orderedId } from 'nope-id'
 
 // Таблица пользователей с префиксными ID
 const user = {
@@ -653,32 +777,38 @@ const user = {
   email: 'john@example.com'
 }
 
-// Заказы с сортируемыми ID (автосортировка по времени создания)
+// Заказы со строго монотонными сортируемыми ID (автосортировка по времени создания)
 const order = {
-  id: sortableId(),  // "01HGW2BBK0QZRMTX12345A"
+  id: orderedId(),  // "1okw67hF111114mDXU1ez"
   userId: user.id,
   total: 99.99
 }
 
 // CommonJS
-const { prefixedId, sortableId } = require('nope-id')
+const { prefixedId, orderedId } = require('nope-id')
 ```
 
 ### Генерация API-токенов
 
 ```javascript
 // ES Modules
-import { nopeid, prefixedId } from 'nope-id'
+import { apiKey, secureToken, defineToken } from 'nope-id'
 
-// API-ключи
-const apiKey = prefixedId('sk', 32)  // "sk_V1StGXR8_Z5jdHi6B-myTV1StGXR8_"
+// API-ключ с префиксом (без пула, эфемерный, префикс валидируется)
+const key = apiKey('sk_live', 40)        // "sk_live_<40 символов>"
 
-// Refresh-токены
-const refreshToken = nopeid(64)  // 64-символьный безопасный токен
+// Refresh / сессионные / токены сброса пароля
+const refreshToken = secureToken(48)     // 48-символьный URL-safe, CSPRNG, зануляется
+
+// Типизированный токен с тройкой generate / is / parse
+const SessionToken = defineToken('sess', { size: 48 })
+const sessionToken = SessionToken.generate()
 
 // CommonJS
-const { nopeid, prefixedId } = require('nope-id')
+const { apiKey, secureToken, defineToken } = require('nope-id')
 ```
+
+> Семейство `secureToken` обходит строковый пул `nopeid()` — каждый вызов делает свой CSPRNG-fill, поэтому дамп памяти не может раскрыть ещё не выданные токены. Используйте его для любых bearer-секретов. `nopeid()` / `prefixedId()` — только для публичных ID.
 
 ### Сокращатель URL
 
@@ -701,7 +831,7 @@ const { slugId, shortId } = require('nope-id')
 
 ```javascript
 // ES Modules
-import { distributedId, sortableId, getFingerprint } from 'nope-id'
+import { distributedId, orderedId, getFingerprint } from 'nope-id'
 
 // ID, безопасные в multi-node
 const eventId = distributedId()
@@ -710,15 +840,15 @@ const eventId = distributedId()
 // Лог с идентификацией узла
 console.log(`[${getFingerprint()}] Обработка события ${eventId}`)
 
-// Временные ряды с сортируемыми ID
+// Временные ряды со строго монотонными сортируемыми ID
 const metric = {
-  id: sortableId(),
+  id: orderedId(),
   timestamp: new Date(),
   value: 42
 }
 
 // CommonJS
-const { distributedId, getFingerprint } = require('nope-id')
+const { distributedId, orderedId, getFingerprint } = require('nope-id')
 ```
 
 ### React / Next.js
@@ -751,7 +881,7 @@ import { nopeid } from 'nope-id/non-secure'
 ```javascript
 // CommonJS
 const express = require('express')
-const { prefixedId, sortableId, uuid } = require('nope-id')
+const { prefixedId, orderedId, uuid } = require('nope-id')
 
 const app = express()
 
@@ -766,7 +896,7 @@ app.post('/users', (req, res) => {
 
 app.post('/orders', (req, res) => {
   const order = {
-    id: sortableId(),  // Сортируемый по времени создания
+    id: orderedId(),  // Сортируемый по времени создания, строго монотонный
     ...req.body
   }
   // Сохранить заказ...
@@ -845,7 +975,7 @@ nope-id спроектирован с приоритетом безопасно�
 
 | Функция безопасности | Описание |
 |-----------------|-------------|
-| **Защита от timing-атак** | `isValid()` использует сравнение за константное время, чтобы предотвратить timing-атаки по сторонним каналам, которые могли бы выдать информацию о допустимых символах |
+| **Уменьшенная утечка по времени** | `isValid()` не использует ранний возврат на первом плохом символе; ослабляет самые очевидные атаки position-oracle. (Это не строгое константное время — тайминг V8 `Set.has` не гарантированно однороден.) |
 | **Устранение modulo bias** | Использует rejection sampling для обеспечения идеально равномерного распределения для алфавитов любых размеров (не только степеней двойки) |
 | **Защита от prototype pollution** | Объект `alphabets` заморожен с null prototype, защищён от атак prototype pollution |
 | **Защита от integer overflow** | `collisionProbability()` использует BigInt для точных вычислений с астрономически большими числами |
@@ -863,7 +993,7 @@ nope-id спроектирован с приоритетом безопасно�
 
 ## Тестирование
 
-nope-id имеет покрытие из **307 тестов** по 6 наборам, включая security-специфичные тесты.
+nope-id имеет покрытие из **380 тестов** по 10 наборам, включая security-специфичные тесты.
 
 ### Запуск тестов
 
@@ -878,19 +1008,27 @@ npm run test:utils       # Утилиты (isValid, collisionProbability)
 npm run test:non-secure  # Тесты небезопасной версии
 npm run test:idtypes     # Новые типы ID (uuidv7, ulid, snowflake, objectId)
 npm run test:encoding    # Sqids, типизированные ID, валидаторы форматов
+npm run test:secure-token # secureToken, apiKey, defineToken
+npm run test:ordered-id  # orderedId, orderedId.many, parse, asciiBytes
+npm run test:parity      # CJS-зеркала совпадают с ESM-сборками
+npm run test:tiers       # тиры пополнения customAlphabet (hex / степень двойки / rejection)
 ```
 
 ### Покрытие тестов
 
 | Набор тестов | Тесты | Описание |
 |------------|-------|-------------|
-| **Core** | 81 | nopeid, customAlphabet, customRandom, random, alphabets |
-| **Features** | 78 | prefixedId, sortableId, uuid, slugId, shortId, distributedId |
+| **Core** | 82 | nopeid, customAlphabet, customRandom, random, alphabets |
+| **Features** | 79 | prefixedId, sortableId, uuid, slugId, shortId, distributedId |
 | **Utils** | 56 | isValid, collisionProbability, тесты безопасности |
 | **Non-Secure** | 29 | Версия на Math.random() |
-| **ID Types** | 31 | uuidv7, ulid, monotonicFactory, snowflake, objectId |
+| **ID Types** | 33 | uuidv7, ulid, monotonicFactory, snowflake, objectId |
 | **Encoding** | 32 | sqids, defineId, isValidUUID, isValidULID |
-| **Всего** | **307** | Все проходят |
+| **Secure Token** | 23 | secureToken, apiKey, defineToken |
+| **Ordered ID** | 16 | orderedId, orderedId.many, parse, asciiBytes |
+| **Parity** | 14 | CJS-зеркала (index.cjs, non-secure/index.cjs) |
+| **Alphabet Tiers** | 16 | тиры пополнения customAlphabet, чанкование customRandom |
+| **Всего** | **380** | Все проходят |
 
 ### Тесты безопасности
 
@@ -900,7 +1038,7 @@ npm run test:encoding    # Sqids, типизированные ID, валида�
 📦 Безопасность isValid()
   ✅ отклоняет строки с null-байтами
   ✅ отклоняет строки с unicode zero-width символами
-  ✅ валидация за константное время (защита от timing-атак)
+  ✅ валидация без раннего возврата (уменьшение timing-утечки)
 
 📦 Защита от Prototype Pollution
   ✅ объект alphabets заморожен
@@ -963,12 +1101,12 @@ npm run test:randomness
 > Запустите `npm run benchmark` локально, чтобы увидеть числа на своей машине.
 
 <!-- bench:meta:start -->
-_Последнее обновление: 2026-05-27, Node v26.x, ubuntu-latest (GitHub Actions)._
+_Последнее обновление: 2026-07-13, Node v26.x, ubuntu-latest (GitHub Actions)._
 <!-- bench:meta:end -->
 
 ### Бенчмарк nope-id vs nanoid
 
-**nope-id выигрывает все 5 основных бенчмарков против nanoid 5.1.11** и предоставляет много дополнительных форматов ID и усиления безопасности сверху.
+**nope-id выигрывает все 5 основных бенчмарков против актуального nanoid** (точная версия в таблице ниже) и предоставляет много дополнительных форматов ID и усиления безопасности сверху.
 
 Запустите бенчмарк сами:
 
@@ -976,16 +1114,16 @@ _Последнее обновление: 2026-05-27, Node v26.x, ubuntu-latest 
 npm run benchmark
 ```
 
-**Результаты (Node.js 20+, nanoid 5.1.11, авто-калибровка ~120 мс × лучшее из 7 попыток, с глобальным прогревом для честности; абсолютные числа варьируются от машины к машине):**
+**Результаты (Node.js 20+, актуальный установленный nanoid, авто-калибровка ~120 мс × лучшее из 7 попыток, с глобальным прогревом для честности; абсолютные числа варьируются от машины к машине):**
 
 <!-- bench:comparison-table:start -->
-| Тест | nanoid 5.1.11 | nope-id | Победитель |
+| Тест | nanoid 6.0.0 | nope-id | Победитель |
 |------|--------|---------|--------|
-| Базовый (21 символ) | ~5.4M оп/сек | **~40.1M оп/сек** | **nope-id ~7.5x** |
-| Короткий (10 символов) | ~10.1M оп/сек | **~44.5M оп/сек** | **nope-id ~4.4x** |
-| Длинный (64 символа) | ~2.1M оп/сек | **~18.9M оп/сек** | **nope-id ~9.1x** |
-| Свой алфавит | ~5.7M оп/сек | **~19.9M оп/сек** | **nope-id ~3.5x** |
-| Пакетный (100 ID) | ~54K оп/сек | **~438K оп/сек** | **nope-id ~8.1x** |
+| Базовый (21 символ) | ~29M оп/сек | **~60.7M оп/сек** | **nope-id ~2.1x** |
+| Короткий (10 символов) | ~37.9M оп/сек | **~56.4M оп/сек** | **nope-id ~1.5x** |
+| Длинный (64 символа) | ~11.7M оп/сек | **~36.9M оп/сек** | **nope-id ~3.1x** |
+| Свой алфавит | ~34.7M оп/сек | **~73.9M оп/сек** | **nope-id ~2.1x** |
+| Пакетный (100 ID) | ~272K оп/сек | **~817K оп/сек** | **nope-id ~3x** |
 <!-- bench:comparison-table:end -->
 
 **Результат: nope-id выигрывает 5/5 у nanoid** в URL-безопасных ID, при этом предоставляя множество дополнительных возможностей и усиление безопасности.
@@ -996,12 +1134,13 @@ nope-id - самая быстрая **JavaScript** библиотека для �
 
 Скорость берётся из инженерии, а не из срезания углов в случайности:
 
-- **Кешированная pool-строка:** пул байт CSPRNG переводится in-place в коды символов алфавита при пополнении, затем **один раз** декодируется в плоскую однобайтовую строку (`idPool.toString('latin1')`), которая кешируется как `idPoolStr`. Каждый вызов `nopeid()` возвращает один `idPoolStr.substring(start, end)`, V8 SlicedString (O(1), zero-copy) для размеров ≥ 13 и крошечная инлайн-копия ниже, вместо того чтобы платить ~50 нс фиксированных накладных `Buffer.toString` на каждый вызов. Тот же трюк используется в `customAlphabet`, `uuid()` и других.
-- **16-битное батчевое пополнение:** in-place перевод проходит пул 16-битными чанками через precomputed таблицу `Uint16Array` 64 КиБ, отображающую любые два случайных байта прямо в два кода алфавита, сокращая количество итераций пополнения вдвое (endian-agnostic by construction).
-- **Пулированный CSPRNG:** одно заполнение `crypto.getRandomValues()` покрывает тысячи ID при дефолтном размере вместо одного syscall на ID. `uuid()` идёт дальше: предварительно форматирует 4096 v4 UUID (с уже патченными битами версии + RFC 4122 variant) в одну строку 144 КиБ, так что каждый вызов - это просто `substring(start, start+36)`.
-- **Bitmask, без modulo:** индекс алфавита берётся из `byte & 63` на 64-символьном алфавите, поэтому на hot path нет rejection sampling или modulo bias.
-- **Precomputed таблицы для всего остального:** byte-to-hex для `uuid()`/`uuidv7()`/`objectId()`, char-коды для Crockford в `ulid()`/`monotonicFactory()`, плюс переиспользуемые scratch-буферы уровня модуля (`UUID_BUF`, `SORT_BUF`, `ULID_BUF`), так что путь на каждый вызов никогда не аллоцирует.
-- **`customAlphabet` без аллокаций:** читает общий байтовый пул напрямую, отображая rejection-sampled байты в pre-decoded char-code пул, hot path которого тоже `substring(start, end)`; это также ускоряет `slugId()` и `shortId()`.
+- **Кешированная pool-строка:** при пополнении 49152 сырых байта CSPRNG **один раз** кодируются одним нативным вызовом `Buffer.toString('base64url')` в плоскую строку из 65536 символов, кешируемую как `idPoolStr` (набор символов base64url в точности совпадает с URL-безопасным алфавитом, и каждый символ несёт 6 равномерных бит). Каждый вызов `nopeid()` возвращает один `idPoolStr.substring(start, end)`: V8 SlicedString (O(1), zero-copy) для размеров ≥ 13 и крошечная инлайн-копия ниже, без стоимости кодирования на каждый вызов. Тот же трюк используется в `customAlphabet`, `uuid()` и других.
+- **Нативное кодирование, без JS-цикла перевода:** пополнение не делает никакой JavaScript-работы на байт и потребляет все 8 бит каждого случайного байта (дизайн до 1.4 отбрасывал 2 бита на байт в цикле перевода `byte & 63`), поэтому пополнение стоит ~2.3x дешевле и тратит на 25% меньше байт CSPRNG на символ. Браузерная сборка использует нативный `Uint8Array.toBase64`, где он доступен (текущие Chrome/Firefox/Safari), а 16-битная таблица перевода остаётся fallback-ом для старых движков.
+- **Пулированный CSPRNG:** одно заполнение `randomFillSync()` (в браузере `crypto.getRandomValues()`) покрывает тысячи ID при дефолтном размере вместо одного syscall на ID. `uuid()` идёт дальше: предварительно форматирует 4096 v4 UUID (с уже патченными битами версии + RFC 4122 variant) в одну строку 144 КиБ, так что каждый вызов - это просто `substring(start, start+36)`.
+- **Без смещения, по построению:** символы base64url в `nopeid()` - это точные 6-битные группы потока CSPRNG (биекция, отклонять нечего), а алфавиты с длиной не-степенью-двойки сохраняют полный rejection sampling, поэтому ни на одном пути нет modulo bias.
+- **`customAlphabet` с тирами по форме алфавита:** фабрика выбирает стратегию пополнения один раз на алфавит: полностью нативное hex-кодирование для hex-алфавитов, branch-free bulk-перевод для длин-степеней-двойки и однопроходный bulk rejection sampling для всего остального. Hot path всегда один `substring(start, end)`; это также ускоряет `slugId()` и `shortId()`.
+- **Кеш временного префикса:** `sortableId()`, `ulid()`, `uuidv7()` и `objectId()` перекодируют свой префикс метки времени только когда значение часов действительно меняется, а случайные хвосты берут из заранее закодированных пул-строк (несмещённый `& 31` Crockford / нативный hex), так что путь на вызов - это короткая конкатенация строк.
+- **Precomputed таблицы для всего остального:** упакованные 16-битные byte-to-hex записи для `uuid()`, char-коды Crockford для `ulid()`/`monotonicFactory()`, плюс переиспользуемые scratch-буферы уровня модуля, так что путь на каждый вызов никогда не аллоцирует.
 
 С чем nope-id **не пытается** соревноваться:
 
@@ -1016,12 +1155,12 @@ nope-id - самая быстрая **JavaScript** библиотека для �
 <!-- bench:uuid-table:start -->
 | Генератор | оп/сек | |
 |---|---|---|
-| `crypto.randomUUID()` (Node native, v4) | ~21.7M | C++ binding (только обычный v4) |
-| nope-id `uuid()` (v4) | **~25.1M** | 🥇 самый быстрый pure-JS v4 |
-| `@lukeed/uuid` `v4()` | ~6.9M | оптимизированный pure-JS v4 |
-| `uuid` package `v4()` | ~5.9M | |
-| nope-id `uuidv7()` | ~5.0M | **~11x от v7 пакета `uuid`** |
-| `uuid` package `v7()` | ~445K | |
+| `crypto.randomUUID()` (Node native, v4) | ~20.4M | C++ binding (только обычный v4) |
+| nope-id `uuid()` (v4) | **~33.3M** | 🥇 самый быстрый pure-JS v4 |
+| `@lukeed/uuid` `v4()` | ~7.2M | оптимизированный pure-JS v4 |
+| `uuid` package `v4()` | ~6.0M | |
+| nope-id `uuidv7()` | ~8.6M | **~20x от v7 пакета `uuid`** |
+| `uuid` package `v7()` | ~424K | |
 <!-- bench:uuid-table:end -->
 
 **Честный подход:** `uuid()` в nope-id предварительно форматирует 4096 v4 UUID на каждое пополнение CSPRNG, поэтому каждый вызов - это просто `substring()`. Результат: как минимум на одном уровне с нативным `crypto.randomUUID()`, а в текущем CI - впереди него. На реальном железе они меняются местами (общий путь энтропии CSPRNG плюс шум раннера), поэтому считайте их практически равными по скорости. Если всё, что вам нужно, это обычный v4 UUID, и вы не хотите зависимости, stdlib справится. Но если вы уже используете nope-id для чего-то ещё (UUIDv7, ULID, Snowflake, ObjectId, Sqids, типизированные ID, короткие ID в стиле nanoid или просто URL-безопасные ID быстрее nanoid), нет смысла тянуться к native; `uuid()` как минимум так же быстр, dual-module и zero-dependency.
@@ -1035,9 +1174,9 @@ nope-id предоставляет соответствующий специфи
 <!-- bench:ulid-table:start -->
 | Генератор | оп/сек |
 |---|---|
-| nope-id `ulid()` | **~2.9M** |
-| `ulid` package | ~32K |
-| nope-id `monotonicFactory()` | **~8.5M** |
+| nope-id `ulid()` | **~12.9M** |
+| `ulid` package | ~30K |
+| nope-id `monotonicFactory()` | **~7.4M** |
 | `ulid` package (monotonic) | ~2.1M |
 <!-- bench:ulid-table:end -->
 
@@ -1050,8 +1189,8 @@ nope-id гораздо быстрее для обычного `ulid()`, пото
 <!-- bench:sortable-table:start -->
 | Генератор | оп/сек |
 |---|---|
-| nope-id `sortableId()` (22-char Crockford) | ~6.4M |
-| `sparkid` (21-char Base58) | **~9.8M** |
+| nope-id `sortableId()` (22-char Crockford) | **~13.7M** |
+| `sparkid` (21-char Base58) | ~10.4M |
 <!-- bench:sortable-table:end -->
 
 ### Скорость vs энтропия: где находится каждая библиотека
@@ -1061,13 +1200,13 @@ nope-id гораздо быстрее для обычного `ulid()`, пото
 <!-- bench:speed-vs-entropy-table:start -->
 | Генератор | оп/сек | энтропия / id | источник случайности |
 |---|---|---|---|
-| **nope-id `nopeid()`** | **~40.1M** | **~126 бит (64-символьный URL-безопасный)** | **CSPRNG** |
-| `uid/secure` | ~6.1M | ~84 бит (16-символьный hex) | CSPRNG |
-| nanoid | ~5.4M | ~126 бит (64-символьный URL-безопасный) | CSPRNG |
-| `sparkid` | ~9.8M | ~76 бит случайных (Base58, сортируемый по времени) | CSPRNG |
-| `rndm` | ~2.8M | ~125 бит, но предсказуемые | `Math.random` (не безопасный) |
-| `secure-random-string` | ~405K | ~126 бит (base64, не URL-безопасный) | CSPRNG |
-| cuid2 `createId()` | ~5.6K | 24 символа, hash-производный | CSPRNG + SHA-3 |
+| **nope-id `nopeid()`** | **~60.7M** | **~126 бит (64-символьный URL-безопасный)** | **CSPRNG** |
+| `uid/secure` | ~6.3M | ~84 бит (16-символьный hex) | CSPRNG |
+| nanoid | ~29M | ~126 бит (64-символьный URL-безопасный) | CSPRNG |
+| `sparkid` | ~10.4M | ~76 бит случайных (Base58, сортируемый по времени) | CSPRNG |
+| `rndm` | ~2.9M | ~125 бит, но предсказуемые | `Math.random` (не безопасный) |
+| `secure-random-string` | ~368K | ~126 бит (base64, не URL-безопасный) | CSPRNG |
+| cuid2 `createId()` | ~5.8K | 24 символа, hash-производный | CSPRNG + SHA-3 |
 <!-- bench:speed-vs-entropy-table:end -->
 
 Читая по двум осям, **скорость** и **безопасность**, каждая другая библиотека чем-то жертвует:
@@ -1077,7 +1216,7 @@ nope-id гораздо быстрее для обычного `ulid()`, пото
 - **`secure-random-string`** соответствует энтропии nope-id, но примерно в 80 раз медленнее и выдаёт base64 (не URL-безопасный).
 - **cuid2** намеренно тратит скорость на усиленную, sharding-безопасную, hash-based модель.
 - **`sparkid`** работает на CSPRNG, сортируется по времени, монотонен и достаточно быстр в своей нише; обменивает 8 из 21 символов на временной префикс Base58, оставляя ~76 бит непредсказуемой случайности на id (на уровне ULID). Если вам нужна **максимальная случайность на id**, `nopeid()` в nope-id сохраняет все 126 бит при той же длине. Если вам конкретно нужно **sortable + monotonic**, sparkid силён в своей нише (см. head-to-head выше); для ULID-совместимого вывода в 26 символов Crockford в nope-id есть `sortableId()`, `ulid()` и `monotonicFactory()`.
-- **nanoid** точно соответствует энтропии nope-id (тот же 64-символьный алфавит); nope-id просто в <!-- bench:basic-21-ratio:start -->~7.5x<!-- bench:basic-21-ratio:end --> раза быстрее на дефолтном 21-символьном размере.
+- **nanoid** точно соответствует энтропии nope-id (тот же 64-символьный алфавит); nope-id просто в <!-- bench:basic-21-ratio:start -->~2.1x<!-- bench:basic-21-ratio:end --> раза быстрее на дефолтном 21-символьном размере.
 
 nope-id - единственный ряд, у которого есть **все три сразу**: максимальная энтропия на символ (126 бит), реальный CSPRNG и высочайшая скорость. Это и есть цель всего проекта - быть быстрым, никогда не тратя случайность ради этого. (Для обычного v4 UUID нативный `crypto.randomUUID()` примерно на одном уровне с `uuid()` nope-id на 122 битах в C++; берите stdlib, если вам нужен только v4 UUID и вы не хотите зависимости.)
 
@@ -1088,18 +1227,18 @@ nope-id - единственный ряд, у которого есть **все
 <!-- bench:extras-table:start -->
 | Функция | Производительность |
 |---------|-------------|
-| `sortableId()` | ~6.4M оп/сек |
-| `prefixedId()` | ~28.9M оп/сек |
-| `uuid()` | ~25.6M оп/сек |
-| `slugId()` | ~6.6M оп/сек |
-| `shortId()` | ~14.1M оп/сек |
-| `isValid()` | ~7.1M оп/сек |
-| `uuidv7()` | ~5.1M оп/сек |
-| `ulid()` | ~2.8M оп/сек |
-| `monotonicFactory()` | ~8.5M оп/сек |
+| `sortableId()` | ~13.7M оп/сек |
+| `prefixedId()` | ~38.3M оп/сек |
+| `uuid()` | ~33M оп/сек |
+| `slugId()` | ~8.2M оп/сек |
+| `shortId()` | ~17.8M оп/сек |
+| `isValid()` | ~15.2M оп/сек |
+| `uuidv7()` | ~8.5M оп/сек |
+| `ulid()` | ~13M оп/сек |
+| `monotonicFactory()` | ~7.2M оп/сек |
 | `snowflake` (factory) | ~4.1M оп/сек |
-| `objectId()` | ~7.2M оп/сек |
-| `sqids.encode()` | ~212K оп/сек |
+| `objectId()` | ~14.5M оп/сек |
+| `sqids.encode()` | ~216K оп/сек |
 <!-- bench:extras-table:end -->
 
 ---

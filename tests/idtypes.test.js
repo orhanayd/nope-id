@@ -67,6 +67,19 @@ describe('uuidv7()', () => {
     for (let i = 0; i < 5000; i++) ids.add(uuidv7())
     assert.equal(ids.size, 5000)
   })
+
+  test('variant nibble is uniform over 8/9/a/b', () => {
+    // Guards the variant-pick path: deriving the variant from a hex CHAR CODE
+    // with &3 (instead of the hex VALUE &3) would skew this distribution.
+    const counts = { 8: 0, 9: 0, a: 0, b: 0 }
+    const n = 20000
+    for (let i = 0; i < n; i++) counts[uuidv7()[19]]++
+    const expected = n / 4
+    for (const v of '89ab') {
+      assert.between(counts[v], expected * 0.9, expected * 1.1,
+        `variant '${v}' count ${counts[v]} outside ±10% of ${expected}`)
+    }
+  })
 })
 
 describe('ulid()', () => {
@@ -226,6 +239,11 @@ describe('objectId()', () => {
   test('decodeObjectIdTime throws on short input', () => {
     assert.throws(() => decodeObjectIdTime('abc'))
     assert.throws(() => decodeObjectIdTime(null))
+  })
+
+  test('decodeObjectIdTime throws on non-hex 24-char input', () => {
+    assert.throws(() => decodeObjectIdTime('z'.repeat(24)), /Invalid ObjectId/)
+    assert.throws(() => decodeObjectIdTime('g'.repeat(24)), /Invalid ObjectId/)
   })
 })
 

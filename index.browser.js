@@ -5,9 +5,13 @@
 export const urlAlphabet =
   'useandom-26T198340PX75pxJACKVERYMINDBUSHWOLF_GQZbfghjklqvwyzrict'
 
-// Single Set for the default urlAlphabet. isValid() reuses this when the caller
-// passes no custom alphabet, instead of building a fresh 64-element Set per call.
-const URL_ALPHABET_SET = /* @__PURE__ */ new Set(urlAlphabet)
+// 256-entry membership table for the default urlAlphabet. isValid() indexes it
+// by charCodeAt — no per-char single-character string allocation like Set.has(id[i]).
+const URL_VALID_TABLE = /* @__PURE__ */ (() => {
+  const table = new Uint8Array(256)
+  for (let i = 0; i < urlAlphabet.length; i++) table[urlAlphabet.charCodeAt(i)] = 1
+  return table
+})()
 
 // Pre-built alphabets for different use cases
 // Object.freeze prevents modification and prototype pollution attacks
@@ -38,35 +42,11 @@ const SORT_BUF = /* @__PURE__ */ new Uint8Array(22)
 
 // Precomputed byte -> 2-char hex (faster + clearer than toString(16).padStart per byte)
 const byteToHex = /* @__PURE__ */ Array.from({ length: 256 }, (_, i) => i.toString(16).padStart(2, '0'))
-// Byte -> hi/lo ASCII hex char codes for direct UUID_BUF writes.
+// Byte -> hi/lo ASCII hex char codes; feed the packed HEX16_LE store in uuid()'s
+// refill and the pooled hex string used by uuidv7.
 const HEX_HI = /* @__PURE__ */ Uint8Array.from(byteToHex, s => s.charCodeAt(0))
 const HEX_LO = /* @__PURE__ */ Uint8Array.from(byteToHex, s => s.charCodeAt(1))
 
-// Reusable 36-byte UUID scratch with hyphens pre-baked at 8/13/18/23.
-const UUID_BUF = /* @__PURE__ */ new Uint8Array(36)
-UUID_BUF[8] = UUID_BUF[13] = UUID_BUF[18] = UUID_BUF[23] = 0x2d
-
-// Format 16 bytes as a hyphenated UUID by writing 32 hex char codes into UUID_BUF
-// then one-shot decoding it — beats 16 string lookups + 4 ConsString joins.
-const bytesToUuid = b => {
-  UUID_BUF[0]  = HEX_HI[b[0]];  UUID_BUF[1]  = HEX_LO[b[0]]
-  UUID_BUF[2]  = HEX_HI[b[1]];  UUID_BUF[3]  = HEX_LO[b[1]]
-  UUID_BUF[4]  = HEX_HI[b[2]];  UUID_BUF[5]  = HEX_LO[b[2]]
-  UUID_BUF[6]  = HEX_HI[b[3]];  UUID_BUF[7]  = HEX_LO[b[3]]
-  UUID_BUF[9]  = HEX_HI[b[4]];  UUID_BUF[10] = HEX_LO[b[4]]
-  UUID_BUF[11] = HEX_HI[b[5]];  UUID_BUF[12] = HEX_LO[b[5]]
-  UUID_BUF[14] = HEX_HI[b[6]];  UUID_BUF[15] = HEX_LO[b[6]]
-  UUID_BUF[16] = HEX_HI[b[7]];  UUID_BUF[17] = HEX_LO[b[7]]
-  UUID_BUF[19] = HEX_HI[b[8]];  UUID_BUF[20] = HEX_LO[b[8]]
-  UUID_BUF[21] = HEX_HI[b[9]];  UUID_BUF[22] = HEX_LO[b[9]]
-  UUID_BUF[24] = HEX_HI[b[10]]; UUID_BUF[25] = HEX_LO[b[10]]
-  UUID_BUF[26] = HEX_HI[b[11]]; UUID_BUF[27] = HEX_LO[b[11]]
-  UUID_BUF[28] = HEX_HI[b[12]]; UUID_BUF[29] = HEX_LO[b[12]]
-  UUID_BUF[30] = HEX_HI[b[13]]; UUID_BUF[31] = HEX_LO[b[13]]
-  UUID_BUF[32] = HEX_HI[b[14]]; UUID_BUF[33] = HEX_LO[b[14]]
-  UUID_BUF[34] = HEX_HI[b[15]]; UUID_BUF[35] = HEX_LO[b[15]]
-  return ID_DECODER.decode(UUID_BUF)
-}
 
 // Pool management for reduced crypto calls
 // Max pool size is 65536 (crypto.getRandomValues limit)
@@ -106,12 +86,27 @@ const URL_ALPHABET_CODES = /* @__PURE__ */ Uint8Array.from(urlAlphabet, c => c.c
 // ConsString chain produced by `id += alphabet[...]`.
 const ID_DECODER = /* @__PURE__ */ new TextDecoder('latin1')
 
-// Dedicated pool for nopeid(): CSPRNG bytes translated in place to alphabet char codes.
-// Each call is then a single TextDecoder.decode(subarray) call. Kept separate from `pool`
-// (raw bytes for random()/customAlphabet()/uuid()/etc.).
+// Dedicated pool for nopeid(). Two refill strategies, picked once at load:
+//  - Engines with Uint8Array.prototype.toBase64 (ES2026; current Chrome/Firefox/
+//    Safari) encode a 49152-byte raw buffer natively to 65536 base64url chars —
+//    no JS translate loop. base64url's char SET equals urlAlphabet's set, each
+//    char carries 6 uniform CSPRNG bits, so every charset/distribution contract
+//    holds; only the internal 6-bit→char mapping order differs (statistically
+//    irrelevant for uniform random input). Matches the Node builds' approach.
+//  - Older engines keep the 16-bit-table translate + TextDecoder fallback.
+const HAS_NATIVE_B64 = typeof Uint8Array.prototype.toBase64 === 'function'
+const B64_OPTS = { alphabet: 'base64url', omitPadding: true }
+const ID_POOL_RAW_BYTES = 49152 // divisible by 3 → no padding group, 65536 chars
 let idPool, idPoolOffset, idPoolView, idPoolCodes16, idPoolStr
 
 const fillIdPool = () => {
+  if (HAS_NATIVE_B64) {
+    if (!idPool) idPool = new Uint8Array(ID_POOL_RAW_BYTES)
+    fillBuffer(idPool)
+    idPoolStr = idPool.toBase64(B64_OPTS)
+    idPoolOffset = 0
+    return
+  }
   if (!idPool) {
     idPool = new Uint8Array(MAX_POOL_SIZE)
     idPoolView = new Uint16Array(idPool.buffer, idPool.byteOffset, MAX_POOL_SIZE >> 1)
@@ -135,36 +130,105 @@ const fillIdPool = () => {
 // Shared zero-length result for non-positive random() requests (avoids pool corruption)
 const EMPTY = new Uint8Array(0)
 
-// Get random bytes from pool
-export const random = bytes => {
+// Internal view into the shared pool — zero-alloc, but bytes may be silently
+// overwritten by a subsequent fillPool(). Safe only inside a single synchronous
+// translate-and-discard step (sortableId, ulid, uuidv7, monotonicFactory, objectId).
+const randomView = bytes => {
   bytes |= 0
   if (bytes <= 0) return EMPTY
   fillPool(bytes)
   return pool.subarray(poolOffset - bytes, poolOffset)
 }
 
-// Custom random function ID generator (core implementation)
-// Uses rejection sampling to eliminate modulo bias
-export const customRandom = (alphabet, defaultSize, getRandom) => {
+// Public: returns a fresh COPY. Safe to retain across subsequent
+// random()/nopeid()/customAlphabet() calls.
+export const random = bytes => {
+  bytes |= 0
+  if (bytes <= 0) return EMPTY
+  fillPool(bytes)
+  return new Uint8Array(pool.subarray(poolOffset - bytes, poolOffset))
+}
+
+// Factory-time alphabet validation in a single pass: empty/oversize/non-Latin-1/
+// duplicate chars. Returns a precomputed Uint8Array of char codes.
+const validateAlphabet = alphabet => {
   if (!alphabet || alphabet.length === 0) {
     throw new Error('Alphabet cannot be empty')
   }
-  const codes = Uint8Array.from(alphabet, c => c.charCodeAt(0))
+  if (alphabet.length > 256) {
+    throw new Error('Alphabet cannot be longer than 256 characters')
+  }
+  const codes = new Uint8Array(alphabet.length)
+  const seen = new Set()
+  for (let i = 0; i < alphabet.length; i++) {
+    const ch = alphabet[i]
+    const code = alphabet.charCodeAt(i)
+    if (code > 255) {
+      throw new Error('Alphabet must contain only Latin-1 characters (0-255)')
+    }
+    if (seen.has(ch)) {
+      throw new Error('Alphabet must contain unique characters')
+    }
+    seen.add(ch)
+    codes[i] = code
+  }
+  return codes
+}
+
+const CPOOL_TARGET = 32768
+// Rejection-sampling scratch length for one refill pass: enough raw bytes that a
+// single pass almost always yields CPOOL_TARGET accepted chars (1.6x headroom),
+// capped at 65536 (webcrypto getRandomValues per-call limit).
+const rejectionScratchLen = (mask, len) =>
+  Math.min(65536, Math.ceil((1.6 * (mask + 1) * CPOOL_TARGET) / len))
+
+// Custom random function ID generator (core implementation)
+// Uses rejection sampling to eliminate modulo bias
+export const customRandom = (alphabet, defaultSize, getRandom) => {
+  const codes = validateAlphabet(alphabet)
   const len = alphabet.length
   const mask = (2 << (31 - Math.clz32((len - 1) | 1))) - 1
-  const step = Math.ceil((1.6 * mask * defaultSize) / len)
+  // One bulk getRandom per refill pass instead of ~1000+ tiny step-sized calls.
+  // Power-of-2 alphabets accept every byte, so their pass is exactly CPOOL_TARGET.
+  const pow2 = mask === len - 1
+  const passLen = pow2 ? CPOOL_TARGET : rejectionScratchLen(mask, len)
 
-  const CPOOL_TARGET = 32768
   let cPool = '', cPoolOffset = 0
 
   return (size = defaultSize) => {
     if (size <= 0) return ''
+    // Cold path for huge requests: don't touch the cached cPool.
+    if (size > CPOOL_TARGET) {
+      const out = new Uint8Array(size)
+      let n = 0
+      while (n < size) {
+        const remaining = size - n
+        const localStep = pow2
+          ? remaining
+          : Math.min(65536, Math.max(1, Math.ceil((1.6 * (mask + 1) * remaining) / len)))
+        const bytes = getRandom(localStep)
+        if (!bytes || bytes.length < localStep) {
+          throw new Error('getRandom must return at least the requested number of bytes')
+        }
+        for (let i = 0; i < localStep && n < size; i++) {
+          const idx = bytes[i] & mask
+          if (idx < len) out[n++] = codes[idx]
+        }
+      }
+      return ID_DECODER.decode(out)
+    }
     if (cPoolOffset + size > cPool.length) {
-      const buf = new Uint8Array(CPOOL_TARGET + step)
+      const buf = new Uint8Array(passLen)
       let n = 0
       while (n < CPOOL_TARGET) {
-        const bytes = getRandom(step)
-        for (let i = 0; i < step; i++) {
+        const bytes = getRandom(passLen)
+        if (!bytes || bytes.length < passLen) {
+          throw new Error('getRandom must return at least the requested number of bytes')
+        }
+        // Guard n < passLen: a top-up pass after a rare shortfall must not
+        // write past `buf` (typed-array writes past the end are silent no-ops,
+        // which would desync n from the chars actually stored).
+        for (let i = 0; i < passLen && n < passLen; i++) {
           const idx = bytes[i] & mask
           if (idx < len) buf[n++] = codes[idx]
         }
@@ -178,36 +242,83 @@ export const customRandom = (alphabet, defaultSize, getRandom) => {
   }
 }
 
-// Custom alphabet ID generator factory
+// Custom alphabet ID generator factory. The refill strategy is picked ONCE at
+// factory time by alphabet shape (all tiers share the same hot path: one
+// cPool.substring per call). Unlike the Node builds there is no native hex
+// tier (no Buffer here); power-of-2 alphabets — including hex — take the bulk
+// translate tier, everything else the bulk rejection tier. Both replace the
+// old per-step fillPool loop (~1000+ small CSPRNG pool hits per refill) with
+// one bulk getRandomValues. This also powers slugId/shortId.
 export const customAlphabet = (alphabet, defaultSize = 21) => {
-  if (!alphabet || alphabet.length === 0) {
-    throw new Error('Alphabet cannot be empty')
-  }
-  if (alphabet.length > 256) {
-    throw new Error('Alphabet cannot be longer than 256 characters')
-  }
-  const codes = Uint8Array.from(alphabet, c => c.charCodeAt(0))
+  const codes = validateAlphabet(alphabet)
   const len = alphabet.length
   const mask = (2 << (31 - Math.clz32((len - 1) | 1))) - 1
-  const step = Math.ceil((1.6 * mask * defaultSize) / len)
 
-  const CPOOL_TARGET = 32768
   let cPool = '', cPoolOffset = 0
+  let raw // lazily allocated per-factory refill scratch
 
+  // Tier 2: power-of-2 alphabet length — the mask is exact, every byte is
+  // accepted, so the refill is one bulk fill + a branch-free translate loop.
+  if (mask === len - 1) {
+    return (size = defaultSize) => {
+      if (size <= 0) return ''
+      // Cold path: same bulk translate, into a one-shot local buffer.
+      if (size > CPOOL_TARGET) {
+        const out = new Uint8Array(size)
+        fillBuffer(out)
+        for (let i = 0; i < size; i++) out[i] = codes[out[i] & mask]
+        return ID_DECODER.decode(out)
+      }
+      if (cPoolOffset + size > cPool.length) {
+        if (!raw) raw = new Uint8Array(CPOOL_TARGET)
+        fillBuffer(raw)
+        for (let i = 0; i < CPOOL_TARGET; i++) raw[i] = codes[raw[i] & mask]
+        cPool = ID_DECODER.decode(raw)
+        cPoolOffset = 0
+      }
+      const start = cPoolOffset
+      cPoolOffset += size
+      return cPool.substring(start, cPoolOffset)
+    }
+  }
+
+  // Tier 3: non-power-of-2 — bulk fill a rejection scratch once, accept in a
+  // single pass. A rare statistical shortfall triggers one top-up pass.
+  const passLen = rejectionScratchLen(mask, len)
+  let scratch // lazily allocated alongside `raw`
   return (size = defaultSize) => {
     if (size <= 0) return ''
-    if (cPoolOffset + size > cPool.length) {
-      const buf = new Uint8Array(CPOOL_TARGET + step)
+    // Cold path for huge requests: local buffers, don't touch the cached cPool.
+    if (size > CPOOL_TARGET) {
+      const out = new Uint8Array(size)
+      const localScratch = new Uint8Array(passLen)
       let n = 0
-      while (n < CPOOL_TARGET) {
-        fillPool(step)
-        const base = poolOffset - step
-        for (let i = 0; i < step; i++) {
-          const idx = pool[base + i] & mask
-          if (idx < len) buf[n++] = codes[idx]
+      while (n < size) {
+        fillBuffer(localScratch)
+        for (let i = 0; i < passLen && n < size; i++) {
+          const idx = localScratch[i] & mask
+          if (idx < len) out[n++] = codes[idx]
         }
       }
-      cPool = ID_DECODER.decode(buf.subarray(0, n))
+      return ID_DECODER.decode(out)
+    }
+    if (cPoolOffset + size > cPool.length) {
+      if (!raw) {
+        raw = new Uint8Array(passLen)
+        scratch = new Uint8Array(passLen)
+      }
+      let n = 0
+      while (n < CPOOL_TARGET) {
+        fillBuffer(scratch)
+        // Guard n < passLen: a top-up pass must not write past `raw`
+        // (typed-array writes past the end are silent no-ops, which would
+        // desync n from the chars actually stored).
+        for (let i = 0; i < passLen && n < passLen; i++) {
+          const idx = scratch[i] & mask
+          if (idx < len) raw[n++] = codes[idx]
+        }
+      }
+      cPool = ID_DECODER.decode(raw.subarray(0, n))
       cPoolOffset = 0
     }
     const start = cPoolOffset
@@ -253,16 +364,44 @@ const incrementRandom = () => {
   return false
 }
 
-// ULID-like sortable ID with monotonic guarantee
+// ULID-like sortable ID with monotonic guarantee (legacy).
 // Max wait iterations prevents DoS from frozen system clock
+//
+// @deprecated Prefer orderedId() — fixed 21-char Base58, stronger invariants,
+//             explicit counter overflow handling. sortableId() is kept for
+//             backward compatibility; sizes < 22 truncate the format and
+//             weaken uniqueness guarantees.
 const MAX_CLOCK_WAIT_ITERATIONS = 10000
+
+// Cached string pieces (same pattern as orderedId): the 10-char timestamp
+// prefix is re-encoded only when the ms changes, the first 11 counter digits
+// only on a carry (1-in-32 of same-ms calls), and the hot same-ms increment
+// touches nothing but the final digit's char code. The common call is then a
+// 3-part concat instead of 22 buffer writes + a fixed-cost decode.
+let sortTsPrefix = ''   // 10 Crockford chars for lastTime
+let sortRndPrefix = ''  // 11 Crockford chars: lastRandom[0..10]
+let sortTailCode = 0    // char code of CROCKFORD_CODES[lastRandom[11]]
+
+const rebuildSortRnd = () => {
+  for (let i = 0; i < 11; i++) SORT_BUF[i] = CROCKFORD_CODES[lastRandom[i]]
+  sortRndPrefix = ID_DECODER.decode(SORT_BUF.subarray(0, 11))
+  sortTailCode = CROCKFORD_CODES[lastRandom[11]]
+}
 
 export const sortableId = (size = 22) => {
   if (size <= 0) return ''
-  const now = Date.now()
+  let now = Date.now()
+  // Clock rewind clamp — see index.js for rationale.
+  if (now < lastTime) now = lastTime
 
   if (now === lastTime) {
-    if (!incrementRandom()) {
+    if (lastRandom[RANDOM_LENGTH - 1] < 31) {
+      // Common case: only the last counter digit advances.
+      sortTailCode = CROCKFORD_CODES[++lastRandom[RANDOM_LENGTH - 1]]
+    } else if (incrementRandom()) {
+      // Carry propagated into the first 11 digits — rebuild their cached string.
+      rebuildSortRnd()
+    } else {
       // Random overflow - wait for next millisecond with DoS protection
       let iterations = 0
       while (Date.now() === now && iterations++ < MAX_CLOCK_WAIT_ITERATIONS) {
@@ -277,25 +416,25 @@ export const sortableId = (size = 22) => {
   } else {
     // Manual loop instead of Array.from(arr, fn) so we don't rely on V8 hoisting.
     lastTime = now
-    const bytes = random(RANDOM_LENGTH)
+    const bytes = randomView(RANDOM_LENGTH)
     lastRandom = new Array(RANDOM_LENGTH)
     for (let i = 0; i < RANDOM_LENGTH; i++) lastRandom[i] = bytes[i] & 31
+    rebuildSortRnd()
+    let t = now
+    for (let i = 9; i >= 0; i--) { SORT_BUF[i] = CROCKFORD_CODES[t & 31]; t = Math.floor(t / 32) }
+    sortTsPrefix = ID_DECODER.decode(SORT_BUF.subarray(0, 10))
   }
 
-  // Encode directly into the reusable 22-byte scratch buffer.
-  let t = now
-  for (let i = 9; i >= 0; i--) { SORT_BUF[i] = CROCKFORD_CODES[t & 31]; t = Math.floor(t / 32) }
-  for (let i = 0; i < RANDOM_LENGTH; i++) SORT_BUF[10 + i] = CROCKFORD_CODES[lastRandom[i]]
-
-  if (size >= 22) {
-    if (size === 22) return ID_DECODER.decode(SORT_BUF)
+  const base = sortTsPrefix + sortRndPrefix + String.fromCharCode(sortTailCode)
+  if (size === 22) return base
+  if (size > 22) {
     const extraLen = size - 22
     const tail = new Uint8Array(extraLen)
-    const extra = random(extraLen)
+    const extra = randomView(extraLen)
     for (let i = 0; i < extraLen; i++) tail[i] = CROCKFORD_CODES[extra[i] & 31]
-    return ID_DECODER.decode(SORT_BUF) + ID_DECODER.decode(tail)
+    return base + ID_DECODER.decode(tail)
   }
-  return ID_DECODER.decode(SORT_BUF.subarray(0, size))
+  return base.substring(0, size)
 }
 
 // Prefixed ID generator
@@ -307,31 +446,83 @@ export const prefixedId = (prefix, size = 21, separator = '_') => {
 }
 
 // Generate multiple unique IDs
-export const generateMany = (count, size = 21) => {
-  if (count <= 0) return []
-  count |= 0
+const GENERATE_MANY_MAX = 1_000_000
 
-  const ids = new Array(count)
-  for (let i = 0; i < count; i++) {
-    ids[i] = nopeid(size)
+// Batch path slices the shared id pool directly with hoisted locals — same IDs
+// as a nopeid() loop, without paying per-call function entry + coercion + global
+// loads count times.
+export const generateMany = (count, size = 21) => {
+  count |= 0
+  if (count <= 0) return []
+  if (count > GENERATE_MANY_MAX) {
+    throw new Error(`generateMany count exceeds maximum (${GENERATE_MANY_MAX})`)
   }
+  size |= 0
+  const ids = new Array(count)
+  if (size <= 0 || size > MAX_POOL_SIZE) {
+    // Degenerate/cold sizes: defer to nopeid's own handling per entry.
+    for (let i = 0; i < count; i++) ids[i] = nopeid(size)
+    return ids
+  }
+  if (!idPool) fillIdPool()
+  let str = idPoolStr
+  let offset = idPoolOffset
+  for (let i = 0; i < count; i++) {
+    if (offset + size > MAX_POOL_SIZE) {
+      fillIdPool()
+      str = idPoolStr
+      offset = 0
+    }
+    const start = offset
+    offset += size
+    ids[i] = str.substring(start, offset)
+  }
+  idPoolOffset = offset
   return ids
 }
 
+// Cached 256-entry membership tables for custom isValid alphabets, so repeated
+// validation against the same alphabet doesn't rebuild its lookup per call.
+// `null` marks a non-Latin-1 alphabet (falls back to a Set). Bounded: cleared
+// wholesale if callers somehow churn through 32+ distinct alphabets.
+const VALID_TABLE_CACHE = new Map()
+const validTableFor = alphabet => {
+  let table = VALID_TABLE_CACHE.get(alphabet)
+  if (table === undefined) {
+    table = new Uint8Array(256)
+    for (let i = 0; i < alphabet.length; i++) {
+      const code = alphabet.charCodeAt(i)
+      if (code > 255) { table = null; break }
+      table[code] = 1
+    }
+    if (VALID_TABLE_CACHE.size >= 32) VALID_TABLE_CACHE.clear()
+    VALID_TABLE_CACHE.set(alphabet, table)
+  }
+  return table
+}
+
 // Validate ID
-// Uses constant-time comparison to prevent timing attacks
+// No early-return on first bad char — avoids the obvious first-bad-char timing
+// leak. This is NOT a true constant-time check; it just blocks the most naive
+// position oracle. charCodeAt + table lookup avoids Set.has(id[i])'s per-char
+// single-character string allocation. Chars outside Latin-1 index past the
+// table (undefined), which the &= correctly folds to invalid.
 export const isValid = (id, alphabet = urlAlphabet) => {
   if (typeof id !== 'string' || id.length === 0) return false
 
-  // Reuse the hoisted Set for the common (urlAlphabet) case; only allocate when a
-  // caller passes a custom alphabet. Set has O(1) lookup either way.
-  const charSet = alphabet === urlAlphabet ? URL_ALPHABET_SET : new Set(alphabet)
-
-  // Constant-time validation: always check all characters
-  // to prevent timing attacks that could leak valid character positions
+  const table = alphabet === urlAlphabet ? URL_VALID_TABLE : validTableFor(alphabet)
+  if (table === null) {
+    // Rare: alphabet itself contains non-Latin-1 chars — table can't represent it.
+    const charSet = new Set(alphabet)
+    let valid = 1
+    for (let i = 0; i < id.length; i++) {
+      valid &= charSet.has(id[i]) ? 1 : 0
+    }
+    return valid === 1
+  }
   let valid = 1
   for (let i = 0; i < id.length; i++) {
-    valid &= charSet.has(id[i]) ? 1 : 0
+    valid &= table[id.charCodeAt(i)]
   }
   return valid === 1
 }
@@ -355,7 +546,9 @@ export const collisionProbability = (idLength, alphabetSize = 64) => {
   return {
     totalPossible: possibleIds,
     totalPossibleBigInt: possibleIdsBig,
-    probabilityForBillion: 1 - Math.exp((-1e9 * (1e9 - 1)) / (2 * possibleIdsExact)),
+    // -Math.expm1(x) computes 1 - exp(x) accurately for x near 0; the naive
+    // 1 - exp(x) loses precision and reports 0 for safe id sizes.
+    probabilityForBillion: -Math.expm1((-1e9 * (1e9 - 1)) / (2 * possibleIdsExact)),
     safeCount: Math.sqrt(2 * possibleIdsExact * Math.log(2)),
     yearsFor1Percent: Math.sqrt(2 * possibleIdsExact * 0.01) / (365.25 * 24 * 60 * 60 * 1000),
   }
@@ -373,46 +566,51 @@ export const nopeidAsync = async (size = 21) => {
 // substring(start, start+36) — entropy unchanged (122 random bits per UUID).
 const UUID_POOL_COUNT = 4096
 const UUID_POOL_BYTES = UUID_POOL_COUNT * 36
-let uuidPool, uuidPoolStr, uuidPoolOffset, uuidRawScratch
+
+// byte -> both hex char codes packed for one little-endian 16-bit store
+// (low byte = high nibble's char, so it lands first in memory). Built lazily
+// with the uuid pool. DataView is used for the stores because the odd hyphen
+// offsets make half the hex pairs unaligned.
+let HEX16_LE = null
+let uuidPool, uuidPoolView, uuidPoolStr, uuidPoolOffset, uuidRawScratch
 export const uuid = () => {
   if (!uuidPool || uuidPoolOffset >= UUID_POOL_BYTES) {
     if (!uuidPool) {
       uuidPool = new Uint8Array(UUID_POOL_BYTES)
+      uuidPoolView = new DataView(uuidPool.buffer, uuidPool.byteOffset, UUID_POOL_BYTES)
       for (let k = 0; k < UUID_POOL_COUNT; k++) {
         const o = k * 36
         uuidPool[o + 8] = uuidPool[o + 13] = uuidPool[o + 18] = uuidPool[o + 23] = 0x2d
       }
       uuidRawScratch = new Uint8Array(UUID_POOL_COUNT * 16)
+      HEX16_LE = new Uint16Array(256)
+      for (let b = 0; b < 256; b++) HEX16_LE[b] = HEX_HI[b] | (HEX_LO[b] << 8)
     }
     fillBuffer(uuidRawScratch)
     const raw = uuidRawScratch
+    const dv = uuidPoolView
+    const hx = HEX16_LE
     for (let k = 0; k < UUID_POOL_COUNT; k++) {
       const ri = k << 4
       const oo = k * 36
-      const b0 = raw[ri], b1 = raw[ri + 1], b2 = raw[ri + 2], b3 = raw[ri + 3]
-      const b4 = raw[ri + 4], b5 = raw[ri + 5]
-      const b6 = (raw[ri + 6] & 0x0f) | 0x40
-      const b7 = raw[ri + 7]
-      const b8 = (raw[ri + 8] & 0x3f) | 0x80
-      const b9 = raw[ri + 9]
-      const b10 = raw[ri + 10], b11 = raw[ri + 11], b12 = raw[ri + 12]
-      const b13 = raw[ri + 13], b14 = raw[ri + 14], b15 = raw[ri + 15]
-      uuidPool[oo]      = HEX_HI[b0];  uuidPool[oo + 1]  = HEX_LO[b0]
-      uuidPool[oo + 2]  = HEX_HI[b1];  uuidPool[oo + 3]  = HEX_LO[b1]
-      uuidPool[oo + 4]  = HEX_HI[b2];  uuidPool[oo + 5]  = HEX_LO[b2]
-      uuidPool[oo + 6]  = HEX_HI[b3];  uuidPool[oo + 7]  = HEX_LO[b3]
-      uuidPool[oo + 9]  = HEX_HI[b4];  uuidPool[oo + 10] = HEX_LO[b4]
-      uuidPool[oo + 11] = HEX_HI[b5];  uuidPool[oo + 12] = HEX_LO[b5]
-      uuidPool[oo + 14] = HEX_HI[b6];  uuidPool[oo + 15] = HEX_LO[b6]
-      uuidPool[oo + 16] = HEX_HI[b7];  uuidPool[oo + 17] = HEX_LO[b7]
-      uuidPool[oo + 19] = HEX_HI[b8];  uuidPool[oo + 20] = HEX_LO[b8]
-      uuidPool[oo + 21] = HEX_HI[b9];  uuidPool[oo + 22] = HEX_LO[b9]
-      uuidPool[oo + 24] = HEX_HI[b10]; uuidPool[oo + 25] = HEX_LO[b10]
-      uuidPool[oo + 26] = HEX_HI[b11]; uuidPool[oo + 27] = HEX_LO[b11]
-      uuidPool[oo + 28] = HEX_HI[b12]; uuidPool[oo + 29] = HEX_LO[b12]
-      uuidPool[oo + 30] = HEX_HI[b13]; uuidPool[oo + 31] = HEX_LO[b13]
-      uuidPool[oo + 32] = HEX_HI[b14]; uuidPool[oo + 33] = HEX_LO[b14]
-      uuidPool[oo + 34] = HEX_HI[b15]; uuidPool[oo + 35] = HEX_LO[b15]
+      // Patch version (4) into byte 6 and RFC 4122 variant into byte 8, then
+      // write each byte's two hex chars with a single 16-bit store.
+      dv.setUint16(oo,      hx[raw[ri]], true)
+      dv.setUint16(oo + 2,  hx[raw[ri + 1]], true)
+      dv.setUint16(oo + 4,  hx[raw[ri + 2]], true)
+      dv.setUint16(oo + 6,  hx[raw[ri + 3]], true)
+      dv.setUint16(oo + 9,  hx[raw[ri + 4]], true)
+      dv.setUint16(oo + 11, hx[raw[ri + 5]], true)
+      dv.setUint16(oo + 14, hx[(raw[ri + 6] & 0x0f) | 0x40], true)
+      dv.setUint16(oo + 16, hx[raw[ri + 7]], true)
+      dv.setUint16(oo + 19, hx[(raw[ri + 8] & 0x3f) | 0x80], true)
+      dv.setUint16(oo + 21, hx[raw[ri + 9]], true)
+      dv.setUint16(oo + 24, hx[raw[ri + 10]], true)
+      dv.setUint16(oo + 26, hx[raw[ri + 11]], true)
+      dv.setUint16(oo + 28, hx[raw[ri + 12]], true)
+      dv.setUint16(oo + 30, hx[raw[ri + 13]], true)
+      dv.setUint16(oo + 32, hx[raw[ri + 14]], true)
+      dv.setUint16(oo + 34, hx[raw[ri + 15]], true)
     }
     uuidPoolStr = ID_DECODER.decode(uuidPool)
     uuidPoolOffset = 0
@@ -462,53 +660,113 @@ export const getFingerprint = () => {
 }
 
 // Distributed-safe ID
+const DISTRIBUTED_ID_MIN = 16
+
 export const distributedId = (size = 25) => {
-  if (size <= 0) return ''
-  const fp = getFingerprint()
-  const separator = '_'
-  const base = fp + separator
-
-  if (size <= base.length) {
-    return base.slice(0, size)
+  if (!Number.isInteger(size) || size < DISTRIBUTED_ID_MIN) {
+    throw new Error(`distributedId size must be an integer >= ${DISTRIBUTED_ID_MIN}`)
   }
-
-  const remaining = size - base.length
-  return base + nopeid(remaining)
+  const fp = getFingerprint()
+  return fp + '_' + nopeid(size - fp.length - 1)
 }
 
 // === UUID v7 (RFC 9562) - time-ordered, index-friendly ===
 
-// Write a 48-bit millisecond timestamp into the first 6 bytes (big-endian)
-const writeTimestamp48 = (bytes, ms) => {
-  bytes[0] = Math.floor(ms / 0x10000000000) & 0xff
-  bytes[1] = Math.floor(ms / 0x100000000) & 0xff
-  bytes[2] = Math.floor(ms / 0x1000000) & 0xff
-  bytes[3] = Math.floor(ms / 0x10000) & 0xff
-  bytes[4] = Math.floor(ms / 0x100) & 0xff
-  bytes[5] = ms & 0xff
+
+// Shared pooled hex string: 16384 CSPRNG bytes hex-encoded once per refill
+// (32768 hex chars), served as substrings. Used for uuidv7's random tail chars.
+let hexPoolStr = '', hexPoolOffset = 0, hexPoolRaw, hexPoolOut
+const hexTail = n => {
+  if (hexPoolOffset + n > hexPoolStr.length) {
+    if (!hexPoolRaw) {
+      hexPoolRaw = new Uint8Array(16384)
+      hexPoolOut = new Uint8Array(32768)
+    }
+    fillBuffer(hexPoolRaw)
+    for (let i = 0; i < 16384; i++) {
+      const b = hexPoolRaw[i]
+      hexPoolOut[i << 1] = HEX_HI[b]
+      hexPoolOut[(i << 1) + 1] = HEX_LO[b]
+    }
+    hexPoolStr = ID_DECODER.decode(hexPoolOut)
+    hexPoolOffset = 0
+  }
+  const start = hexPoolOffset
+  hexPoolOffset += n
+  return hexPoolStr.substring(start, hexPoolOffset)
 }
 
-// UUID v7: 48-bit Unix ms timestamp + version + variant + 74 random bits
+// Variant char keyed by a random hex CHAR's code. The hex char is uniform over
+// its 16 VALUES, and value & 3 is uniform over 4 — so indexing by the char's
+// code (not the code itself & 3, which would be biased by the 0-9/a-f code gap)
+// yields a uniform pick from '89ab'.
+const VARIANT_FROM_HEX_CODE = /* @__PURE__ */ (() => {
+  const table = new Array(256).fill('8')
+  const hex = '0123456789abcdef'
+  for (let v = 0; v < 16; v++) table[hex.charCodeAt(v)] = '89ab'[v & 3]
+  return table
+})()
+
+// UUID v7: 48-bit Unix ms timestamp + version + variant + 74 random bits.
+// The 15-char timestamp+version prefix ("tttttttt-tttt-7") only changes when
+// the millisecond does, so it's cached; per call we splice pooled hex chars
+// around the two remaining hyphens and the variant char.
+let v7LastMs = -1
+let v7Prefix = ''
 export const uuidv7 = () => {
-  const bytes = random(16)
-  writeTimestamp48(bytes, Date.now())
-  bytes[6] = (bytes[6] & 0x0f) | 0x70 // version 7
-  bytes[8] = (bytes[8] & 0x3f) | 0x80 // variant RFC 4122
-  return bytesToUuid(bytes)
+  const ms = Date.now()
+  if (ms !== v7LastMs) {
+    v7LastMs = ms
+    const hi = Math.floor(ms / 0x100000000) // top 16 of the 48-bit timestamp
+    const lo = ms >>> 0                     // low 32 bits
+    v7Prefix = byteToHex[(hi >>> 8) & 0xff] + byteToHex[hi & 0xff] +
+      byteToHex[(lo >>> 24) & 0xff] + byteToHex[(lo >>> 16) & 0xff] + '-' +
+      byteToHex[(lo >>> 8) & 0xff] + byteToHex[lo & 0xff] + '-7'
+  }
+  const r = hexTail(19)
+  // r[0] seeds the variant pick; r[1..18] are the 18 random hex chars
+  // (12 rand_a bits after the version + 60 of rand_b; variant supplies 2 more).
+  return v7Prefix + r.substring(1, 4) + '-' +
+    VARIANT_FROM_HEX_CODE[r.charCodeAt(0)] + r.substring(4, 7) + '-' +
+    r.substring(7, 19)
 }
 
 // === ULID (spec-compliant, 26 chars: 10 timestamp + 16 random, Crockford Base32) ===
 
-// Module-level scratch reused across ulid() calls.
-const ULID_BUF = /* @__PURE__ */ new Uint8Array(26)
+// Module-level scratch for encoding the 10-char ULID timestamp prefix.
+const ULID_BUF = /* @__PURE__ */ new Uint8Array(10)
 
-// 26-char ULID. Fresh randomness each call (non-monotonic); use monotonicFactory() for ordering.
+// Shared pooled Crockford Base32 string: 32768 CSPRNG bytes are translated
+// (byte & 31 — bias-free, 256/32=8) once per refill and served as substrings.
+// Used for ulid()'s 16 random chars.
+let crockPoolStr = '', crockPoolOffset = 0, crockPoolRaw
+const crockTail = n => {
+  if (crockPoolOffset + n > crockPoolStr.length) {
+    if (!crockPoolRaw) crockPoolRaw = new Uint8Array(32768)
+    fillBuffer(crockPoolRaw)
+    const raw = crockPoolRaw
+    for (let i = 0; i < 32768; i++) raw[i] = CROCKFORD_CODES[raw[i] & 31]
+    crockPoolStr = ID_DECODER.decode(raw)
+    crockPoolOffset = 0
+  }
+  const start = crockPoolOffset
+  crockPoolOffset += n
+  return crockPoolStr.substring(start, crockPoolOffset)
+}
+
+// 26-char ULID. Fresh randomness each call (non-monotonic); use monotonicFactory()
+// for ordering. The 10-char timestamp prefix is re-encoded only when the (seed)
+// millisecond changes; the 16 random chars come from the pooled Crockford string.
+let ulidLastMs = -1
+let ulidPrefix = ''
 export const ulid = (seedTime = Date.now()) => {
-  const bytes = random(16)
-  let ms = seedTime
-  for (let i = 9; i >= 0; i--) { ULID_BUF[i] = CROCKFORD_CODES[ms % 32]; ms = Math.floor(ms / 32) }
-  for (let i = 0; i < 16; i++) ULID_BUF[10 + i] = CROCKFORD_CODES[bytes[i] & 31]
-  return ID_DECODER.decode(ULID_BUF)
+  if (seedTime !== ulidLastMs) {
+    ulidLastMs = seedTime
+    let ms = seedTime
+    for (let i = 9; i >= 0; i--) { ULID_BUF[i] = CROCKFORD_CODES[ms % 32]; ms = Math.floor(ms / 32) }
+    ulidPrefix = ID_DECODER.decode(ULID_BUF)
+  }
+  return ulidPrefix + crockTail(16)
 }
 
 // Monotonic ULID factory with ISOLATED state (does not touch global sortableId state).
@@ -533,7 +791,7 @@ export const monotonicFactory = () => {
     }
     // Manual loop instead of Array.from(arr, fn) so we don't rely on V8 hoisting.
     lastTime = seedTime
-    const bytes = random(16)
+    const bytes = randomView(16)
     lastRand = new Array(16)
     let ms = seedTime
     for (let i = 9; i >= 0; i--) { out[i] = CROCKFORD_CODES[ms % 32]; ms = Math.floor(ms / 32) }
@@ -598,29 +856,40 @@ export const decodeSnowflake = (id, epoch = DEFAULT_SNOWFLAKE_EPOCH) => {
 
 // === MongoDB ObjectId compatible (24-char hex) ===
 
-let oidMachine = null // 5 random bytes, per-process (lazy)
-let oidCounter = 0    // 3-byte incrementing counter (lazy random start)
+// The 4-byte timestamp has SECOND granularity and the 5-byte machine id is
+// fixed per process, so the first 18 hex chars change at most once per second.
+// Cache them as one string; each call formats only the 6-hex-char counter.
+let oidCounter = 0     // 3-byte incrementing counter (lazy random start)
+let oidLastSec = -1    // second the cached prefix was built for
+let oidPrefix = null   // 18 hex chars: 8 timestamp + 10 machine (null = lazy init pending)
+let oidMachineHex = ''
 export const objectId = () => {
-  if (oidMachine === null) {
-    oidMachine = Array.from(random(5))
-    const c = random(3)
+  if (oidPrefix === null) {
+    const m = randomView(5)
+    oidMachineHex = byteToHex[m[0]] + byteToHex[m[1]] + byteToHex[m[2]] +
+      byteToHex[m[3]] + byteToHex[m[4]]
+    const c = randomView(3)
     oidCounter = (c[0] << 16) | (c[1] << 8) | c[2]
   }
-  const ts = Math.floor(Date.now() / 1000)
+  const sec = Math.floor(Date.now() / 1000) // not |0: stays valid past 2038
+  if (sec !== oidLastSec) {
+    oidLastSec = sec
+    oidPrefix = byteToHex[(sec >>> 24) & 0xff] + byteToHex[(sec >>> 16) & 0xff] +
+      byteToHex[(sec >>> 8) & 0xff] + byteToHex[sec & 0xff] + oidMachineHex
+  }
   oidCounter = (oidCounter + 1) & 0xffffff
-  const b = [
-    (ts >>> 24) & 0xff, (ts >>> 16) & 0xff, (ts >>> 8) & 0xff, ts & 0xff,
-    oidMachine[0], oidMachine[1], oidMachine[2], oidMachine[3], oidMachine[4],
-    (oidCounter >>> 16) & 0xff, (oidCounter >>> 8) & 0xff, oidCounter & 0xff,
-  ]
-  let hex = ''
-  for (let i = 0; i < 12; i++) hex += byteToHex[b[i]]
-  return hex
+  return oidPrefix +
+    byteToHex[(oidCounter >>> 16) & 0xff] + byteToHex[(oidCounter >>> 8) & 0xff] +
+    byteToHex[oidCounter & 0xff]
 }
 
 // Extract the creation Date from an ObjectId (first 4 bytes = seconds)
+const OBJECT_ID_RE = /^[0-9a-fA-F]{24}$/
+
 export const decodeObjectIdTime = id => {
-  if (typeof id !== 'string' || id.length < 8) throw new Error('Invalid ObjectId')
+  if (typeof id !== 'string' || !OBJECT_ID_RE.test(id)) {
+    throw new Error('Invalid ObjectId')
+  }
   return new Date(parseInt(id.slice(0, 8), 16) * 1000)
 }
 
@@ -748,17 +1017,348 @@ export const sqidsFactory = (options = {}) => {
 export const defineId = (prefix, opts = {}) => {
   if (typeof prefix !== 'string') throw new Error('Prefix must be a string')
   const size = opts.size != null ? opts.size : 21
+  if (!Number.isInteger(size) || size <= 0) {
+    throw new Error('Size must be a positive integer')
+  }
   const separator = opts.separator != null ? opts.separator : '_'
   const alphabet = opts.alphabet || urlAlphabet
   const head = prefix + separator
   const gen = alphabet === urlAlphabet ? () => nopeid(size) : customAlphabet(alphabet, size)
-  const check = value =>
-    typeof value === 'string' && value.startsWith(head) && isValid(value.slice(head.length), alphabet)
+  const check = value => {
+    if (typeof value !== 'string') return false
+    if (!value.startsWith(head)) return false
+    const body = value.slice(head.length)
+    return body.length === size && isValid(body, alphabet)
+  }
   return {
     generate: () => head + gen(),
     is: check,
     parse: value => (check(value) ? { prefix, id: value.slice(head.length) } : null),
   }
+}
+
+// === Secure bearer tokens (unpooled, ephemeral) ===
+// See index.js for full JSDoc rationale.
+
+const SECURE_TOKEN_MIN = 32
+
+export const secureToken = (size = 48) => {
+  if (!Number.isInteger(size) || size < SECURE_TOKEN_MIN) {
+    throw new Error(`secureToken size must be an integer >= ${SECURE_TOKEN_MIN}`)
+  }
+  const buf = new Uint8Array(size)
+  fillBuffer(buf)
+  for (let i = 0; i < size; i++) {
+    buf[i] = URL_ALPHABET_CODES[buf[i] & 63]
+  }
+  const token = ID_DECODER.decode(buf)
+  buf.fill(0)
+  return token
+}
+
+const validateTokenPrefix = (prefix, label) => {
+  if (typeof prefix !== 'string' || prefix.length === 0) {
+    throw new Error(`${label} prefix must be a non-empty string`)
+  }
+  if (/\s/.test(prefix)) {
+    throw new Error(`${label} prefix must not contain whitespace`)
+  }
+}
+
+export const apiKey = (prefix = 'nope_live', size = 40) => {
+  validateTokenPrefix(prefix, 'API key')
+  return `${prefix}_${secureToken(size)}`
+}
+
+export const defineToken = (prefix, opts = {}) => {
+  validateTokenPrefix(prefix, 'Token')
+  const size = opts.size != null ? opts.size : 40
+  if (!Number.isInteger(size) || size < SECURE_TOKEN_MIN) {
+    throw new Error(`Token size must be an integer >= ${SECURE_TOKEN_MIN}`)
+  }
+  const separator = opts.separator != null ? opts.separator : '_'
+  const head = prefix + separator
+  const check = value => {
+    if (typeof value !== 'string') return false
+    if (!value.startsWith(head)) return false
+    const body = value.slice(head.length)
+    return body.length === size && isValid(body, urlAlphabet)
+  }
+  return {
+    generate: () => head + secureToken(size),
+    is: check,
+    parse: value => {
+      if (!check(value)) return null
+      return { prefix, token: value.slice(head.length) }
+    },
+  }
+}
+
+// === orderedId() — sortable 21-char Base58 ID, hot-path string cache ===
+// See index.js for the full architecture / rationale comment.
+
+const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+const BASE58_CHARS = /* @__PURE__ */ Array.from(BASE58_ALPHABET)
+const BASE58_LAST_CC = BASE58_ALPHABET.charCodeAt(BASE58_ALPHABET.length - 1)
+const SUCC_TABLE_SIZE = BASE58_LAST_CC + 1
+
+const SUCCESSOR_CC = /* @__PURE__ */ (() => {
+  const t = new Uint8Array(SUCC_TABLE_SIZE)
+  for (let i = 0; i < BASE58_ALPHABET.length - 1; i++) {
+    t[BASE58_ALPHABET.charCodeAt(i)] = BASE58_ALPHABET.charCodeAt(i + 1)
+  }
+  return t
+})()
+
+const SUCCESSOR = /* @__PURE__ */ (() => {
+  const t = new Array(SUCC_TABLE_SIZE).fill('')
+  for (let i = 0; i < BASE58_ALPHABET.length - 1; i++) {
+    t[BASE58_ALPHABET.charCodeAt(i)] = BASE58_ALPHABET[i + 1]
+  }
+  return t
+})()
+
+const BASE58_INV = /* @__PURE__ */ (() => {
+  const t = new Int8Array(SUCC_TABLE_SIZE).fill(-1)
+  for (let i = 0; i < BASE58_ALPHABET.length; i++) t[BASE58_ALPHABET.charCodeAt(i)] = i
+  return t
+})()
+
+const FIRST_CHAR = BASE58_ALPHABET[0]
+const FIRST_CHAR_CODE = BASE58_ALPHABET.charCodeAt(0)
+
+const ORDERED_TS_LEN = 8
+const ORDERED_CTR_LEN = 5
+const ORDERED_CTR_HEAD_LEN = ORDERED_CTR_LEN - 1
+const ORDERED_RND_LEN = 8
+const ORDERED_TOTAL_LEN = 21
+const ORDERED_PREFIX_LEN = ORDERED_TS_LEN + ORDERED_CTR_HEAD_LEN  // 12
+const ORDERED_CTR_HEAD_LAST = ORDERED_PREFIX_LEN - 1               // 11
+
+let timestampCacheMs = 0
+let timestampCachePrefix = ''
+let prefixPlusCounterHead = ''
+let counterTailCharCode = FIRST_CHAR_CODE
+
+const ORDERED_RND_POOL_SIZE = 16384
+const RND_LOOKUP = /* @__PURE__ */ (() => {
+  const t = new Uint8Array(256)
+  for (let i = 0; i < 256; i++) {
+    const v = i & 63
+    t[i] = v < 58 ? BASE58_ALPHABET.charCodeAt(v) : 0
+  }
+  return t
+})()
+
+let orderedRndRaw
+let orderedRndCharCodes
+let orderedRndPoolStr = ''
+let orderedRndCount = 0
+let orderedRndPosition = 0
+
+const refillRandom = () => {
+  if (!orderedRndRaw) {
+    orderedRndRaw = new Uint8Array(ORDERED_RND_POOL_SIZE)
+    orderedRndCharCodes = new Uint8Array(ORDERED_RND_POOL_SIZE)
+  }
+  fillBuffer(orderedRndRaw)
+  const raw = orderedRndRaw
+  const out = orderedRndCharCodes
+  const lookup = RND_LOOKUP
+  let count = 0
+  for (let i = 0; i < ORDERED_RND_POOL_SIZE; i++) {
+    const cc = lookup[raw[i]]
+    if (cc !== 0) out[count++] = cc
+  }
+  orderedRndCount = count
+  // Pre-materialize the pool as a Latin-1 string so the hot path can serve
+  // 8 random chars via SlicedString substring (zero alloc) instead of
+  // fromCharCode per call.
+  orderedRndPoolStr = ID_DECODER.decode(out.subarray(0, count))
+  orderedRndPosition = 0
+}
+
+const encodeTimestamp = ms => {
+  timestampCacheMs = ms
+  let t = ms
+  const r7 = BASE58_CHARS[t % 58]; t = Math.floor(t / 58)
+  const r6 = BASE58_CHARS[t % 58]; t = Math.floor(t / 58)
+  const r5 = BASE58_CHARS[t % 58]; t = Math.floor(t / 58)
+  const r4 = BASE58_CHARS[t % 58]; t = Math.floor(t / 58)
+  const r3 = BASE58_CHARS[t % 58]; t = Math.floor(t / 58)
+  const r2 = BASE58_CHARS[t % 58]; t = Math.floor(t / 58)
+  const r1 = BASE58_CHARS[t % 58]; t = Math.floor(t / 58)
+  const r0 = BASE58_CHARS[t]
+  timestampCachePrefix = r0 + r1 + r2 + r3 + r4 + r5 + r6 + r7
+}
+
+const incrementEncodedTimestamp = delta => {
+  const lastCC = timestampCachePrefix.charCodeAt(ORDERED_TS_LEN - 1)
+  const newIndex = BASE58_INV[lastCC] + delta
+  if (newIndex < 58) {
+    timestampCachePrefix = timestampCachePrefix.substring(0, ORDERED_TS_LEN - 1) + BASE58_CHARS[newIndex]
+    return
+  }
+  let carryPos = -1
+  for (let i = ORDERED_TS_LEN - 2; i >= 0; i--) {
+    if (SUCCESSOR[timestampCachePrefix.charCodeAt(i)]) {
+      carryPos = i
+      break
+    }
+  }
+  if (carryPos < 0) throw new RangeError('orderedId: timestamp out of Base58 range')
+  timestampCachePrefix = timestampCachePrefix.substring(0, carryPos) +
+                          SUCCESSOR[timestampCachePrefix.charCodeAt(carryPos)] +
+                          FIRST_CHAR.repeat(ORDERED_TS_LEN - 2 - carryPos) +
+                          BASE58_CHARS[newIndex - 58]
+}
+
+const seedCounter = () => {
+  while (orderedRndPosition + ORDERED_CTR_LEN > orderedRndCount) refillRandom()
+  const pos = orderedRndPosition
+  orderedRndPosition = pos + ORDERED_CTR_LEN
+  const cc = orderedRndCharCodes
+  prefixPlusCounterHead = timestampCachePrefix +
+    String.fromCharCode(cc[pos], cc[pos + 1], cc[pos + 2], cc[pos + 3])
+  counterTailCharCode = cc[pos + 4]
+}
+
+const incrementCounterHead = () => {
+  const pph = prefixPlusCounterHead
+  for (let i = ORDERED_CTR_HEAD_LAST; i >= ORDERED_TS_LEN; i--) {
+    const next = SUCCESSOR[pph.charCodeAt(i)]
+    if (next) {
+      prefixPlusCounterHead = pph.substring(0, i) + next +
+                              FIRST_CHAR.repeat(ORDERED_CTR_HEAD_LAST - i)
+      counterTailCharCode = FIRST_CHAR_CODE
+      return
+    }
+  }
+  encodeTimestamp(timestampCacheMs + 1)
+  seedCounter()
+}
+
+// nextOrderedIdWithMs(ms) is the core hot path, parameterized on the wall clock.
+// orderedId() passes a fresh Date.now() per call (timestamp accurate to the
+// call); orderedId.many() passes one clock read per batch (refreshed every 4096
+// IDs) to amortize Date.now() with no background timer. Shared module state, so
+// a many() batch leaves the generator monotonic for the next orderedId().
+const nextOrderedIdWithMs = ms => {
+  if (ms > timestampCacheMs) {
+    const delta = ms - timestampCacheMs
+    if (delta <= 58) {
+      timestampCacheMs = ms
+      incrementEncodedTimestamp(delta)
+    } else {
+      encodeTimestamp(ms)
+    }
+    seedCounter()
+  } else {
+    const nxt = SUCCESSOR_CC[counterTailCharCode]
+    if (nxt) counterTailCharCode = nxt
+    else incrementCounterHead()
+  }
+  // 3-operand concat: 12-char prefix + 1-char tail + an 8-char COPIED substring
+  // (V8 copies slices < 13 chars; it is not a zero-copy view). Measured fastest
+  // on Node 22 (V8 13.x) vs a 9-arg fromCharCode + 4 other variants. See index.js.
+  if (orderedRndPosition + ORDERED_RND_LEN > orderedRndCount) refillRandom()
+  const pos = orderedRndPosition
+  orderedRndPosition = pos + ORDERED_RND_LEN
+  return prefixPlusCounterHead +
+         String.fromCharCode(counterTailCharCode) +
+         orderedRndPoolStr.substring(pos, pos + ORDERED_RND_LEN)
+}
+
+// Sortable, strictly-monotonic 21-char Base58 ID (8 ts + 5 counter + 8 random).
+export const orderedId = () => nextOrderedIdWithMs(Date.now())
+
+orderedId.asciiBytes = () => {
+  const s = orderedId()
+  const out = new Uint8Array(ORDERED_TOTAL_LEN)
+  for (let i = 0; i < ORDERED_TOTAL_LEN; i++) out[i] = s.charCodeAt(i)
+  return out
+}
+
+orderedId.parse = id => {
+  if (typeof id !== 'string' || id.length !== ORDERED_TOTAL_LEN) {
+    throw new Error('Invalid orderedId: must be 21-char Base58 string')
+  }
+  let ts = 0
+  for (let i = 0; i < ORDERED_TS_LEN; i++) {
+    const code = id.charCodeAt(i)
+    const v = code < SUCC_TABLE_SIZE ? BASE58_INV[code] : -1
+    if (v < 0) throw new Error(`Invalid orderedId character at position ${i}: '${id[i]}'`)
+    ts = ts * 58 + v
+  }
+  let ctr = 0
+  for (let i = ORDERED_TS_LEN; i < ORDERED_TS_LEN + ORDERED_CTR_LEN; i++) {
+    const code = id.charCodeAt(i)
+    const v = code < SUCC_TABLE_SIZE ? BASE58_INV[code] : -1
+    if (v < 0) throw new Error(`Invalid orderedId character at position ${i}: '${id[i]}'`)
+    ctr = ctr * 58 + v
+  }
+  return {
+    timestamp: new Date(ts),
+    counter: ctr,
+    random: id.slice(ORDERED_TS_LEN + ORDERED_CTR_LEN),
+  }
+}
+
+// Upper bound on a single orderedId.many() request. Same rationale as
+// GENERATE_MANY_MAX: the result is one Array, and past ~1M entries you want a
+// stream, not a megabyte-scale array held live in young-gen.
+const ORDERED_MANY_MAX = 1_000_000
+
+/**
+ * Generate `count` strictly-monotonic, sortable orderedId()s as an Array.
+ *
+ * Reads the wall clock once at the start of the batch, then only every 4096
+ * IDs, so the per-call Date.now() cost is amortized across the whole batch with
+ * NO background timer and NO change to the default orderedId() path. IDs within
+ * a batch are separated by the strictly-incrementing counter, so the result is
+ * strictly monotonic and sorts in creation order. Because the clock is sampled
+ * at most once per 4096 IDs, an embedded timestamp may lag real time by however
+ * long it takes to emit up to 4096 IDs (sub-millisecond in practice); ordering
+ * is always exact. Shares state with orderedId(), so a following orderedId()
+ * continues monotonically from where the batch left off.
+ *
+ * @param {number} count  Number of IDs. count <= 0 returns []; count > 1,000,000 throws.
+ * @returns {string[]}
+ */
+orderedId.many = count => {
+  count |= 0
+  if (count <= 0) return []
+  if (count > ORDERED_MANY_MAX) {
+    throw new Error(`orderedId.many count exceeds maximum (${ORDERED_MANY_MAX})`)
+  }
+  const out = new Array(count)
+  let i = 0
+  while (i < count) {
+    // One clock read per 4096-ID chunk. Within a chunk `ms` is constant, so
+    // only the first ID can advance the timestamp / reseed the counter; every
+    // later ID is provably a same-ms counter bump. Emit the first via the
+    // shared nextOrderedIdWithMs() and inline the same-ms path for the rest,
+    // dropping the per-ID call + the `ms > timestampCacheMs` branch. The inline
+    // block mirrors nextOrderedIdWithMs()'s else-branch + build — keep in sync.
+    // ~+4% vs per-ID nextOrderedIdWithMs() (multi-process A/B); per-call path
+    // is untouched.
+    const ms = Date.now()
+    let end = i + 4096
+    if (end > count) end = count
+    out[i++] = nextOrderedIdWithMs(ms)
+    for (; i < end; i++) {
+      const nxt = SUCCESSOR_CC[counterTailCharCode]
+      if (nxt) counterTailCharCode = nxt
+      else incrementCounterHead()
+      if (orderedRndPosition + ORDERED_RND_LEN > orderedRndCount) refillRandom()
+      const pos = orderedRndPosition
+      orderedRndPosition = pos + ORDERED_RND_LEN
+      out[i] = prefixPlusCounterHead +
+               String.fromCharCode(counterTailCharCode) +
+               orderedRndPoolStr.substring(pos, pos + ORDERED_RND_LEN)
+    }
+  }
+  return out
 }
 
 // === Format validators ===

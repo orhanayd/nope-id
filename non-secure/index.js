@@ -40,6 +40,16 @@ export const customAlphabet = (alphabet, defaultSize = 21) => {
   if (!alphabet || alphabet.length === 0) {
     throw new Error('Alphabet cannot be empty')
   }
+  if (alphabet.length > 256) {
+    throw new Error('Alphabet cannot be longer than 256 characters')
+  }
+  const seen = new Set()
+  for (let i = 0; i < alphabet.length; i++) {
+    if (seen.has(alphabet[i])) {
+      throw new Error('Alphabet must contain unique characters')
+    }
+    seen.add(alphabet[i])
+  }
 
   return (size = defaultSize) => {
     if (size <= 0) return ''
@@ -83,10 +93,15 @@ const incrementRandom = () => {
   return false
 }
 
-// Sortable ID with monotonic guarantee
+// Sortable ID with monotonic guarantee.
+// @deprecated Prefer the secure orderedId() from the main entry — fixed 21-char
+//             Base58 with stronger invariants. The non-secure module does not
+//             expose orderedId; sortableId is retained here for parity.
 export const sortableId = (size = 22) => {
   if (size <= 0) return ''
-  const now = Date.now()
+  let now = Date.now()
+  // Clock rewind clamp — see index.js for rationale.
+  if (now < lastTime) now = lastTime
 
   if (now === lastTime) {
     if (!incrementRandom()) {
@@ -133,10 +148,14 @@ export const prefixedId = (prefix, size = 21, separator = '_') => {
 }
 
 // Generate multiple IDs
-export const generateMany = (count, size = 21) => {
-  if (count <= 0) return []
-  count |= 0
+const GENERATE_MANY_MAX = 1_000_000
 
+export const generateMany = (count, size = 21) => {
+  count |= 0
+  if (count <= 0) return []
+  if (count > GENERATE_MANY_MAX) {
+    throw new Error(`generateMany count exceeds maximum (${GENERATE_MANY_MAX})`)
+  }
   const ids = new Array(count)
   for (let i = 0; i < count; i++) {
     ids[i] = nopeid(size)
