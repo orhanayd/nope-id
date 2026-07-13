@@ -174,6 +174,11 @@ const validateAlphabet = alphabet => {
 }
 
 const CPOOL_TARGET = 32768
+// Rejection-sampling scratch length for one refill pass: enough raw bytes that a
+// single pass almost always yields CPOOL_TARGET accepted chars (1.6x headroom),
+// capped at 65536 (keeps user getRandom implementations that wrap webcrypto safe).
+const rejectionScratchLen = (mask, len) =>
+  Math.min(65536, Math.ceil((1.6 * (mask + 1) * CPOOL_TARGET) / len))
 
 // Custom random function ID generator (core implementation)
 // Uses rejection sampling to eliminate modulo bias
@@ -181,7 +186,10 @@ const customRandom = (alphabet, defaultSize, getRandom) => {
   const codes = validateAlphabet(alphabet)
   const len = alphabet.length
   const mask = (2 << (31 - Math.clz32((len - 1) | 1))) - 1
-  const step = Math.ceil((1.6 * mask * defaultSize) / len)
+  // One bulk getRandom per refill pass instead of ~1000+ tiny step-sized calls.
+  // Power-of-2 alphabets accept every byte, so their pass is exactly CPOOL_TARGET.
+  const pow2 = mask === len - 1
+  const passLen = pow2 ? CPOOL_TARGET : rejectionScratchLen(mask, len)
 
   let cPool = '', cPoolOffset = 0
 
@@ -193,7 +201,9 @@ const customRandom = (alphabet, defaultSize, getRandom) => {
       let n = 0
       while (n < size) {
         const remaining = size - n
-        const localStep = Math.max(1, Math.ceil((1.6 * mask * remaining) / len))
+        const localStep = pow2
+          ? remaining
+          : Math.min(65536, Math.max(1, Math.ceil((1.6 * (mask + 1) * remaining) / len)))
         const bytes = getRandom(localStep)
         if (!bytes || bytes.length < localStep) {
           throw new Error('getRandom must return at least the requested number of bytes')
@@ -206,14 +216,17 @@ const customRandom = (alphabet, defaultSize, getRandom) => {
       return out.toString('latin1')
     }
     if (cPoolOffset + size > cPool.length) {
-      const buf = Buffer.allocUnsafe(CPOOL_TARGET + step)
+      const buf = Buffer.allocUnsafe(passLen)
       let n = 0
       while (n < CPOOL_TARGET) {
-        const bytes = getRandom(step)
-        if (!bytes || bytes.length < step) {
+        const bytes = getRandom(passLen)
+        if (!bytes || bytes.length < passLen) {
           throw new Error('getRandom must return at least the requested number of bytes')
         }
-        for (let i = 0; i < step; i++) {
+        // Guard n < passLen: a top-up pass after a rare shortfall must not
+        // write past `buf` (typed-array writes past the end are silent no-ops,
+        // which would desync n from the chars actually stored).
+        for (let i = 0; i < passLen && n < passLen; i++) {
           const idx = bytes[i] & mask
           if (idx < len) buf[n++] = codes[idx]
         }
@@ -227,42 +240,118 @@ const customRandom = (alphabet, defaultSize, getRandom) => {
   }
 }
 
+// Hex pools are twice CPOOL_TARGET: the refill is fully native (no JS loop),
+// so a bigger pool halves refill frequency at no per-char cost.
+const HEX_POOL_TARGET = 65536
+
+// Custom alphabet ID generator factory. The refill strategy is picked ONCE at
+// factory time by alphabet shape (all tiers share the same hot path: one
+// cPool.substring per call):
+//   tier 1  hex alphabets      → randomFillSync + native toString('hex')
+//   tier 2  power-of-2 length  → one bulk fill + tight translate loop (no rejection)
+//   tier 3  everything else    → one bulk fill + single-pass rejection sampling
+// Tiers 2/3 replace the old per-step fillPool loop (~1000+ small CSPRNG pool
+// hits per refill) with a single bulk fill. This also powers slugId/shortId.
 const customAlphabet = (alphabet, defaultSize = 21) => {
   const codes = validateAlphabet(alphabet)
   const len = alphabet.length
   const mask = (2 << (31 - Math.clz32((len - 1) | 1))) - 1
-  const step = Math.ceil((1.6 * mask * defaultSize) / len)
 
   let cPool = '', cPoolOffset = 0
+  let raw // lazily allocated per-factory refill scratch
 
+  // Tier 1: exact hex alphabets. Every nibble maps 1:1, encode is all native.
+  // hexUpper pays one toUpperCase per refill — still far below a JS byte loop.
+  if (alphabet === alphabets.hexLower || alphabet === alphabets.hexUpper) {
+    const upper = alphabet === alphabets.hexUpper
+    return (size = defaultSize) => {
+      if (size <= 0) return ''
+      // Cold path: chunked native encode (32768-byte slices → 65536-char strings)
+      if (size > HEX_POOL_TARGET) {
+        const scratch = Buffer.allocUnsafe(HEX_POOL_TARGET >> 1)
+        let out = ''
+        while (out.length < size) {
+          fillBuffer(scratch)
+          out += scratch.toString('hex')
+        }
+        if (upper) out = out.toUpperCase()
+        return out.length > size ? out.slice(0, size) : out
+      }
+      if (cPoolOffset + size > cPool.length) {
+        if (!raw) raw = Buffer.allocUnsafe(HEX_POOL_TARGET >> 1)
+        fillBuffer(raw)
+        cPool = raw.toString('hex')
+        if (upper) cPool = cPool.toUpperCase()
+        cPoolOffset = 0
+      }
+      const start = cPoolOffset
+      cPoolOffset += size
+      return cPool.substring(start, cPoolOffset)
+    }
+  }
+
+  // Tier 2: power-of-2 alphabet length — the mask is exact, every byte is
+  // accepted, so the refill is one bulk fill + a branch-free translate loop.
+  if (mask === len - 1) {
+    return (size = defaultSize) => {
+      if (size <= 0) return ''
+      // Cold path: same bulk translate, into a one-shot local buffer.
+      if (size > CPOOL_TARGET) {
+        const out = Buffer.allocUnsafe(size)
+        fillBuffer(out)
+        for (let i = 0; i < size; i++) out[i] = codes[out[i] & mask]
+        return out.toString('latin1')
+      }
+      if (cPoolOffset + size > cPool.length) {
+        if (!raw) raw = Buffer.allocUnsafe(CPOOL_TARGET)
+        fillBuffer(raw)
+        for (let i = 0; i < CPOOL_TARGET; i++) raw[i] = codes[raw[i] & mask]
+        cPool = raw.toString('latin1')
+        cPoolOffset = 0
+      }
+      const start = cPoolOffset
+      cPoolOffset += size
+      return cPool.substring(start, cPoolOffset)
+    }
+  }
+
+  // Tier 3: non-power-of-2 — bulk fill a rejection scratch once, accept in a
+  // single pass. A rare statistical shortfall triggers one top-up pass.
+  const passLen = rejectionScratchLen(mask, len)
+  let scratch // lazily allocated alongside `raw`
   return (size = defaultSize) => {
     if (size <= 0) return ''
-    // Cold path: large request — local buffer, don't inflate shared `pool` or cached `cPool`.
+    // Cold path for huge requests: local buffers, don't touch the cached cPool.
     if (size > CPOOL_TARGET) {
       const out = Buffer.allocUnsafe(size)
-      const scratch = Buffer.allocUnsafe(Math.min(MAX_POOL_SIZE, Math.max(step, 1024)))
+      const localScratch = Buffer.allocUnsafe(passLen)
       let n = 0
       while (n < size) {
-        fillBuffer(scratch)
-        for (let i = 0; i < scratch.length && n < size; i++) {
-          const idx = scratch[i] & mask
+        fillBuffer(localScratch)
+        for (let i = 0; i < passLen && n < size; i++) {
+          const idx = localScratch[i] & mask
           if (idx < len) out[n++] = codes[idx]
         }
       }
       return out.toString('latin1')
     }
     if (cPoolOffset + size > cPool.length) {
-      const buf = Buffer.allocUnsafe(CPOOL_TARGET + step)
+      if (!raw) {
+        raw = Buffer.allocUnsafe(passLen)
+        scratch = Buffer.allocUnsafe(passLen)
+      }
       let n = 0
       while (n < CPOOL_TARGET) {
-        fillPool(step)
-        const base = poolOffset - step
-        for (let i = 0; i < step; i++) {
-          const idx = pool[base + i] & mask
-          if (idx < len) buf[n++] = codes[idx]
+        fillBuffer(scratch)
+        // Guard n < passLen: a top-up pass must not write past `raw`
+        // (typed-array writes past the end are silent no-ops, which would
+        // desync n from the chars actually stored).
+        for (let i = 0; i < passLen && n < passLen; i++) {
+          const idx = scratch[i] & mask
+          if (idx < len) raw[n++] = codes[idx]
         }
       }
-      cPool = buf.toString('latin1', 0, n)
+      cPool = raw.toString('latin1', 0, n)
       cPoolOffset = 0
     }
     const start = cPoolOffset

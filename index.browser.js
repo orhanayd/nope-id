@@ -181,6 +181,11 @@ const validateAlphabet = alphabet => {
 }
 
 const CPOOL_TARGET = 32768
+// Rejection-sampling scratch length for one refill pass: enough raw bytes that a
+// single pass almost always yields CPOOL_TARGET accepted chars (1.6x headroom),
+// capped at 65536 (webcrypto getRandomValues per-call limit).
+const rejectionScratchLen = (mask, len) =>
+  Math.min(65536, Math.ceil((1.6 * (mask + 1) * CPOOL_TARGET) / len))
 
 // Custom random function ID generator (core implementation)
 // Uses rejection sampling to eliminate modulo bias
@@ -188,7 +193,10 @@ export const customRandom = (alphabet, defaultSize, getRandom) => {
   const codes = validateAlphabet(alphabet)
   const len = alphabet.length
   const mask = (2 << (31 - Math.clz32((len - 1) | 1))) - 1
-  const step = Math.ceil((1.6 * mask * defaultSize) / len)
+  // One bulk getRandom per refill pass instead of ~1000+ tiny step-sized calls.
+  // Power-of-2 alphabets accept every byte, so their pass is exactly CPOOL_TARGET.
+  const pow2 = mask === len - 1
+  const passLen = pow2 ? CPOOL_TARGET : rejectionScratchLen(mask, len)
 
   let cPool = '', cPoolOffset = 0
 
@@ -200,7 +208,9 @@ export const customRandom = (alphabet, defaultSize, getRandom) => {
       let n = 0
       while (n < size) {
         const remaining = size - n
-        const localStep = Math.max(1, Math.ceil((1.6 * mask * remaining) / len))
+        const localStep = pow2
+          ? remaining
+          : Math.min(65536, Math.max(1, Math.ceil((1.6 * (mask + 1) * remaining) / len)))
         const bytes = getRandom(localStep)
         if (!bytes || bytes.length < localStep) {
           throw new Error('getRandom must return at least the requested number of bytes')
@@ -213,14 +223,17 @@ export const customRandom = (alphabet, defaultSize, getRandom) => {
       return ID_DECODER.decode(out)
     }
     if (cPoolOffset + size > cPool.length) {
-      const buf = new Uint8Array(CPOOL_TARGET + step)
+      const buf = new Uint8Array(passLen)
       let n = 0
       while (n < CPOOL_TARGET) {
-        const bytes = getRandom(step)
-        if (!bytes || bytes.length < step) {
+        const bytes = getRandom(passLen)
+        if (!bytes || bytes.length < passLen) {
           throw new Error('getRandom must return at least the requested number of bytes')
         }
-        for (let i = 0; i < step; i++) {
+        // Guard n < passLen: a top-up pass after a rare shortfall must not
+        // write past `buf` (typed-array writes past the end are silent no-ops,
+        // which would desync n from the chars actually stored).
+        for (let i = 0; i < passLen && n < passLen; i++) {
           const idx = bytes[i] & mask
           if (idx < len) buf[n++] = codes[idx]
         }
@@ -234,43 +247,83 @@ export const customRandom = (alphabet, defaultSize, getRandom) => {
   }
 }
 
-// Custom alphabet ID generator factory
+// Custom alphabet ID generator factory. The refill strategy is picked ONCE at
+// factory time by alphabet shape (all tiers share the same hot path: one
+// cPool.substring per call). Unlike the Node builds there is no native hex
+// tier (no Buffer here); power-of-2 alphabets — including hex — take the bulk
+// translate tier, everything else the bulk rejection tier. Both replace the
+// old per-step fillPool loop (~1000+ small CSPRNG pool hits per refill) with
+// one bulk getRandomValues. This also powers slugId/shortId.
 export const customAlphabet = (alphabet, defaultSize = 21) => {
   const codes = validateAlphabet(alphabet)
   const len = alphabet.length
   const mask = (2 << (31 - Math.clz32((len - 1) | 1))) - 1
-  const step = Math.ceil((1.6 * mask * defaultSize) / len)
 
   let cPool = '', cPoolOffset = 0
+  let raw // lazily allocated per-factory refill scratch
 
+  // Tier 2: power-of-2 alphabet length — the mask is exact, every byte is
+  // accepted, so the refill is one bulk fill + a branch-free translate loop.
+  if (mask === len - 1) {
+    return (size = defaultSize) => {
+      if (size <= 0) return ''
+      // Cold path: same bulk translate, into a one-shot local buffer.
+      if (size > CPOOL_TARGET) {
+        const out = new Uint8Array(size)
+        fillBuffer(out)
+        for (let i = 0; i < size; i++) out[i] = codes[out[i] & mask]
+        return ID_DECODER.decode(out)
+      }
+      if (cPoolOffset + size > cPool.length) {
+        if (!raw) raw = new Uint8Array(CPOOL_TARGET)
+        fillBuffer(raw)
+        for (let i = 0; i < CPOOL_TARGET; i++) raw[i] = codes[raw[i] & mask]
+        cPool = ID_DECODER.decode(raw)
+        cPoolOffset = 0
+      }
+      const start = cPoolOffset
+      cPoolOffset += size
+      return cPool.substring(start, cPoolOffset)
+    }
+  }
+
+  // Tier 3: non-power-of-2 — bulk fill a rejection scratch once, accept in a
+  // single pass. A rare statistical shortfall triggers one top-up pass.
+  const passLen = rejectionScratchLen(mask, len)
+  let scratch // lazily allocated alongside `raw`
   return (size = defaultSize) => {
     if (size <= 0) return ''
-    // Cold path: large request — local buffer, don't inflate shared `pool` or cached `cPool`.
+    // Cold path for huge requests: local buffers, don't touch the cached cPool.
     if (size > CPOOL_TARGET) {
       const out = new Uint8Array(size)
-      const scratch = new Uint8Array(Math.min(MAX_POOL_SIZE, Math.max(step, 1024)))
+      const localScratch = new Uint8Array(passLen)
       let n = 0
       while (n < size) {
-        fillBuffer(scratch)
-        for (let i = 0; i < scratch.length && n < size; i++) {
-          const idx = scratch[i] & mask
+        fillBuffer(localScratch)
+        for (let i = 0; i < passLen && n < size; i++) {
+          const idx = localScratch[i] & mask
           if (idx < len) out[n++] = codes[idx]
         }
       }
       return ID_DECODER.decode(out)
     }
     if (cPoolOffset + size > cPool.length) {
-      const buf = new Uint8Array(CPOOL_TARGET + step)
+      if (!raw) {
+        raw = new Uint8Array(passLen)
+        scratch = new Uint8Array(passLen)
+      }
       let n = 0
       while (n < CPOOL_TARGET) {
-        fillPool(step)
-        const base = poolOffset - step
-        for (let i = 0; i < step; i++) {
-          const idx = pool[base + i] & mask
-          if (idx < len) buf[n++] = codes[idx]
+        fillBuffer(scratch)
+        // Guard n < passLen: a top-up pass must not write past `raw`
+        // (typed-array writes past the end are silent no-ops, which would
+        // desync n from the chars actually stored).
+        for (let i = 0; i < passLen && n < passLen; i++) {
+          const idx = scratch[i] & mask
+          if (idx < len) raw[n++] = codes[idx]
         }
       }
-      cPool = ID_DECODER.decode(buf.subarray(0, n))
+      cPool = ID_DECODER.decode(raw.subarray(0, n))
       cPoolOffset = 0
     }
     const start = cPoolOffset
