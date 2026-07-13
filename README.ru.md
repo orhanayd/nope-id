@@ -10,7 +10,7 @@
 - **Быстрее** - в 1.5–3 раз быстрее nanoid (CSPRNG, полный URL-безопасный алфавит); выигрывает все 5 основных бенчмарков ([см. бенчмарки](#производительность))
 <!-- bench:headline:end -->
 - **Усиленная безопасность** - Валидаторы с уменьшенной утечкой по времени, устранение modulo bias, защита от prototype pollution ([безопасность](#безопасность))
-- **Хорошо протестирован** - 342 тестов, включая тесты безопасности и энтропии ([тестирование](#тестирование))
+- **Хорошо протестирован** - 380 тестов, включая тесты безопасности и энтропии ([тестирование](#тестирование))
 - **Криптографически безопасный** - Использует `webcrypto.getRandomValues()` (CSPRNG)
 - **Без зависимостей** - Никаких внешних зависимостей
 - **URL-безопасный** - Использует символы `A-Za-z0-9_-`
@@ -993,7 +993,7 @@ nope-id спроектирован с приоритетом безопасно�
 
 ## Тестирование
 
-nope-id имеет покрытие из **342 тестов** по 8 наборам, включая security-специфичные тесты.
+nope-id имеет покрытие из **380 тестов** по 10 наборам, включая security-специфичные тесты.
 
 ### Запуск тестов
 
@@ -1008,19 +1008,27 @@ npm run test:utils       # Утилиты (isValid, collisionProbability)
 npm run test:non-secure  # Тесты небезопасной версии
 npm run test:idtypes     # Новые типы ID (uuidv7, ulid, snowflake, objectId)
 npm run test:encoding    # Sqids, типизированные ID, валидаторы форматов
+npm run test:secure-token # secureToken, apiKey, defineToken
+npm run test:ordered-id  # orderedId, orderedId.many, parse, asciiBytes
+npm run test:parity      # CJS-зеркала совпадают с ESM-сборками
+npm run test:tiers       # тиры пополнения customAlphabet (hex / степень двойки / rejection)
 ```
 
 ### Покрытие тестов
 
 | Набор тестов | Тесты | Описание |
 |------------|-------|-------------|
-| **Core** | 81 | nopeid, customAlphabet, customRandom, random, alphabets |
-| **Features** | 78 | prefixedId, sortableId, uuid, slugId, shortId, distributedId |
+| **Core** | 82 | nopeid, customAlphabet, customRandom, random, alphabets |
+| **Features** | 79 | prefixedId, sortableId, uuid, slugId, shortId, distributedId |
 | **Utils** | 56 | isValid, collisionProbability, тесты безопасности |
 | **Non-Secure** | 29 | Версия на Math.random() |
-| **ID Types** | 31 | uuidv7, ulid, monotonicFactory, snowflake, objectId |
+| **ID Types** | 33 | uuidv7, ulid, monotonicFactory, snowflake, objectId |
 | **Encoding** | 32 | sqids, defineId, isValidUUID, isValidULID |
-| **Всего** | **307** | Все проходят |
+| **Secure Token** | 23 | secureToken, apiKey, defineToken |
+| **Ordered ID** | 16 | orderedId, orderedId.many, parse, asciiBytes |
+| **Parity** | 14 | CJS-зеркала (index.cjs, non-secure/index.cjs) |
+| **Alphabet Tiers** | 16 | тиры пополнения customAlphabet, чанкование customRandom |
+| **Всего** | **380** | Все проходят |
 
 ### Тесты безопасности
 
@@ -1126,12 +1134,13 @@ nope-id - самая быстрая **JavaScript** библиотека для �
 
 Скорость берётся из инженерии, а не из срезания углов в случайности:
 
-- **Кешированная pool-строка:** пул байт CSPRNG переводится in-place в коды символов алфавита при пополнении, затем **один раз** декодируется в плоскую однобайтовую строку (`idPool.toString('latin1')`), которая кешируется как `idPoolStr`. Каждый вызов `nopeid()` возвращает один `idPoolStr.substring(start, end)`, V8 SlicedString (O(1), zero-copy) для размеров ≥ 13 и крошечная инлайн-копия ниже, вместо того чтобы платить ~50 нс фиксированных накладных `Buffer.toString` на каждый вызов. Тот же трюк используется в `customAlphabet`, `uuid()` и других.
-- **16-битное батчевое пополнение:** in-place перевод проходит пул 16-битными чанками через precomputed таблицу `Uint16Array` 64 КиБ, отображающую любые два случайных байта прямо в два кода алфавита, сокращая количество итераций пополнения вдвое (endian-agnostic by construction).
-- **Пулированный CSPRNG:** одно заполнение `crypto.getRandomValues()` покрывает тысячи ID при дефолтном размере вместо одного syscall на ID. `uuid()` идёт дальше: предварительно форматирует 4096 v4 UUID (с уже патченными битами версии + RFC 4122 variant) в одну строку 144 КиБ, так что каждый вызов - это просто `substring(start, start+36)`.
-- **Bitmask, без modulo:** индекс алфавита берётся из `byte & 63` на 64-символьном алфавите, поэтому на hot path нет rejection sampling или modulo bias.
-- **Precomputed таблицы для всего остального:** byte-to-hex для `uuid()`/`uuidv7()`/`objectId()`, char-коды для Crockford в `ulid()`/`monotonicFactory()`, плюс переиспользуемые scratch-буферы уровня модуля (`UUID_BUF`, `SORT_BUF`, `ULID_BUF`), так что путь на каждый вызов никогда не аллоцирует.
-- **`customAlphabet` без аллокаций:** читает общий байтовый пул напрямую, отображая rejection-sampled байты в pre-decoded char-code пул, hot path которого тоже `substring(start, end)`; это также ускоряет `slugId()` и `shortId()`.
+- **Кешированная pool-строка:** при пополнении 49152 сырых байта CSPRNG **один раз** кодируются одним нативным вызовом `Buffer.toString('base64url')` в плоскую строку из 65536 символов, кешируемую как `idPoolStr` (набор символов base64url в точности совпадает с URL-безопасным алфавитом, и каждый символ несёт 6 равномерных бит). Каждый вызов `nopeid()` возвращает один `idPoolStr.substring(start, end)`: V8 SlicedString (O(1), zero-copy) для размеров ≥ 13 и крошечная инлайн-копия ниже, без стоимости кодирования на каждый вызов. Тот же трюк используется в `customAlphabet`, `uuid()` и других.
+- **Нативное кодирование, без JS-цикла перевода:** пополнение не делает никакой JavaScript-работы на байт и потребляет все 8 бит каждого случайного байта (дизайн до 1.4 отбрасывал 2 бита на байт в цикле перевода `byte & 63`), поэтому пополнение стоит ~2.3x дешевле и тратит на 25% меньше байт CSPRNG на символ. Браузерная сборка использует нативный `Uint8Array.toBase64`, где он доступен (текущие Chrome/Firefox/Safari), а 16-битная таблица перевода остаётся fallback-ом для старых движков.
+- **Пулированный CSPRNG:** одно заполнение `randomFillSync()` (в браузере `crypto.getRandomValues()`) покрывает тысячи ID при дефолтном размере вместо одного syscall на ID. `uuid()` идёт дальше: предварительно форматирует 4096 v4 UUID (с уже патченными битами версии + RFC 4122 variant) в одну строку 144 КиБ, так что каждый вызов - это просто `substring(start, start+36)`.
+- **Без смещения, по построению:** символы base64url в `nopeid()` - это точные 6-битные группы потока CSPRNG (биекция, отклонять нечего), а алфавиты с длиной не-степенью-двойки сохраняют полный rejection sampling, поэтому ни на одном пути нет modulo bias.
+- **`customAlphabet` с тирами по форме алфавита:** фабрика выбирает стратегию пополнения один раз на алфавит: полностью нативное hex-кодирование для hex-алфавитов, branch-free bulk-перевод для длин-степеней-двойки и однопроходный bulk rejection sampling для всего остального. Hot path всегда один `substring(start, end)`; это также ускоряет `slugId()` и `shortId()`.
+- **Кеш временного префикса:** `sortableId()`, `ulid()`, `uuidv7()` и `objectId()` перекодируют свой префикс метки времени только когда значение часов действительно меняется, а случайные хвосты берут из заранее закодированных пул-строк (несмещённый `& 31` Crockford / нативный hex), так что путь на вызов - это короткая конкатенация строк.
+- **Precomputed таблицы для всего остального:** упакованные 16-битные byte-to-hex записи для `uuid()`, char-коды Crockford для `ulid()`/`monotonicFactory()`, плюс переиспользуемые scratch-буферы уровня модуля, так что путь на каждый вызов никогда не аллоцирует.
 
 С чем nope-id **не пытается** соревноваться:
 

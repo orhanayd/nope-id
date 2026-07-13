@@ -10,7 +10,7 @@ A tiny, secure, URL-friendly unique string ID generator for JavaScript.
 - **Faster** - 1.5x to 3x faster than nanoid (CSPRNG, full URL-safe alphabet); wins all 5 core benchmarks ([see benchmarks](#performance))
 <!-- bench:headline:end -->
 - **Security Hardened** - Reduced timing-leak validators, modulo bias elimination, prototype pollution protection ([see security](#security))
-- **Well Tested** - 342 tests including security & entropy tests ([see testing](#testing))
+- **Well Tested** - 380 tests including security & entropy tests ([see testing](#testing))
 - **Cryptographically Secure** - Uses `webcrypto.getRandomValues()` (CSPRNG)
 - **Zero Dependencies** - No external dependencies
 - **URL-safe** - Uses `A-Za-z0-9_-` characters
@@ -1008,7 +1008,7 @@ nope-id is designed with security as a top priority. We've implemented multiple 
 
 ## Testing
 
-nope-id has comprehensive test coverage with **342 tests** across 8 test suites, including security-specific tests.
+nope-id has comprehensive test coverage with **380 tests** across 10 test suites, including security-specific tests.
 
 ### Run Tests
 
@@ -1023,19 +1023,27 @@ npm run test:utils       # Utilities (isValid, collisionProbability)
 npm run test:non-secure  # Non-secure version tests
 npm run test:idtypes     # New ID types (uuidv7, ulid, snowflake, objectId)
 npm run test:encoding    # Sqids, typed IDs, format validators
+npm run test:secure-token # secureToken, apiKey, defineToken
+npm run test:ordered-id  # orderedId, orderedId.many, parse, asciiBytes
+npm run test:parity      # CJS mirrors match the ESM builds
+npm run test:tiers       # customAlphabet refill tiers (hex / pow-2 / rejection)
 ```
 
 ### Test Coverage
 
 | Test Suite | Tests | Description |
 |------------|-------|-------------|
-| **Core** | 81 | nopeid, customAlphabet, customRandom, random, alphabets |
-| **Features** | 78 | prefixedId, sortableId, uuid, slugId, shortId, distributedId |
+| **Core** | 82 | nopeid, customAlphabet, customRandom, random, alphabets |
+| **Features** | 79 | prefixedId, sortableId, uuid, slugId, shortId, distributedId |
 | **Utils** | 56 | isValid, collisionProbability, security tests |
 | **Non-Secure** | 29 | Math.random() based version |
-| **ID Types** | 31 | uuidv7, ulid, monotonicFactory, snowflake, objectId |
+| **ID Types** | 33 | uuidv7, ulid, monotonicFactory, snowflake, objectId |
 | **Encoding** | 32 | sqids, defineId, isValidUUID, isValidULID |
-| **Total** | **307** | All tests passing |
+| **Secure Token** | 23 | secureToken, apiKey, defineToken |
+| **Ordered ID** | 16 | orderedId, orderedId.many, parse, asciiBytes |
+| **Parity** | 14 | CJS mirrors (index.cjs, non-secure/index.cjs) |
+| **Alphabet Tiers** | 16 | customAlphabet refill tiers, customRandom chunking |
+| **Total** | **380** | All tests passing |
 
 ### Security Tests
 
@@ -1141,12 +1149,13 @@ nope-id is the fastest **JavaScript** library for a specific, very common job: a
 
 The speed comes from the engineering, not from cutting corners on randomness:
 
-- **Cached pool string:** the CSPRNG byte pool is translated in place to alphabet character codes on refill, then decoded **once** to a flat one-byte string (`idPool.toString('latin1')`) cached as `idPoolStr`. Each `nopeid()` call then returns a single `idPoolStr.substring(start, end)`, a V8 SlicedString (O(1), zero-copy) for sizes ≥ 13 and a tiny inline copy below that, instead of paying `Buffer.toString`'s ~50 ns fixed cost per call. Same trick powers `customAlphabet`, `uuid()`, and friends.
-- **16-bit batch refill:** the in-place translation walks the pool in 16-bit chunks via a precomputed 64 KiB `Uint16Array` table that maps any two random bytes directly to two alphabet codes, halving the refill iteration count (endian-agnostic by construction).
-- **Pooled CSPRNG:** one `crypto.getRandomValues()` fill covers thousands of IDs at the default size instead of one syscall per ID. `uuid()` goes further: it pre-formats 4096 v4 UUIDs (with version + RFC 4122 variant bits already patched per slot) into one 144 KiB string, so each call is just a `substring(start, start+36)`.
-- **Bitmask, no modulo:** alphabet index comes from `byte & 63` on a 64-character alphabet, so there is no rejection sampling or modulo bias on the hot path.
-- **Precomputed tables for everything else:** byte to hex for `uuid()`/`uuidv7()`/`objectId()`, char codes for Crockford in `ulid()`/`monotonicFactory()`, plus reusable module-scope scratch buffers (`UUID_BUF`, `SORT_BUF`, `ULID_BUF`) so the per-call path never allocates.
-- **Allocation-free `customAlphabet`:** reads the shared byte pool directly, mapping rejected-sampled bytes into a pre-decoded char-code pool whose hot path is again `substring(start, end)`; this also speeds up `slugId()` and `shortId()`.
+- **Cached pool string:** on refill, 49152 raw CSPRNG bytes are encoded **once** with a single native `Buffer.toString('base64url')` into a flat 65536-char string cached as `idPoolStr` (base64url's character set is exactly the URL-safe alphabet, and every char carries 6 uniform bits). Each `nopeid()` call then returns a single `idPoolStr.substring(start, end)`, a V8 SlicedString (O(1), zero-copy) for sizes ≥ 13 and a tiny inline copy below that, instead of paying a per-call encode cost. Same trick powers `customAlphabet`, `uuid()`, and friends.
+- **Native encode, no JS translate loop:** the refill has zero per-byte JavaScript work and consumes all 8 bits of every random byte (the pre-1.4 design discarded 2 bits per byte in a `byte & 63` translate loop), so a refill costs ~2.3x less and draws 25% fewer CSPRNG bytes per char. The browser build uses native `Uint8Array.toBase64` where available (current Chrome/Firefox/Safari) and keeps the 16-bit translate table as a fallback for older engines.
+- **Pooled CSPRNG:** one `randomFillSync()` fill (`crypto.getRandomValues()` in the browser) covers thousands of IDs at the default size instead of one syscall per ID. `uuid()` goes further: it pre-formats 4096 v4 UUIDs (with version + RFC 4122 variant bits already patched per slot) into one 144 KiB string, so each call is just a `substring(start, start+36)`.
+- **No bias, by construction:** `nopeid()`'s base64url chars are exact 6-bit groups of the CSPRNG stream (a bijection, nothing to reject), and non-power-of-2 custom alphabets keep full rejection sampling, so no path has modulo bias.
+- **Shape-tiered `customAlphabet`:** the factory picks its refill strategy once per alphabet: fully native hex encode for hex alphabets, a branch-free bulk translate for power-of-2 lengths, and single-pass bulk rejection sampling for everything else. The hot path is always one `substring(start, end)`; this also speeds up `slugId()` and `shortId()`.
+- **Time-prefix caching:** `sortableId()`, `ulid()`, `uuidv7()`, and `objectId()` re-encode their timestamp prefix only when the clock value actually changes, and take their random tails from pre-encoded pooled strings (bias-free `& 31` Crockford / native hex), so the per-call path is a short string concat.
+- **Precomputed tables for everything else:** packed byte-to-hex 16-bit stores for `uuid()`, Crockford char codes for `ulid()`/`monotonicFactory()`, plus reusable module-scope scratch buffers so the per-call path never allocates.
 
 What nope-id does **not** try to beat:
 
