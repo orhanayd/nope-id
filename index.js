@@ -218,8 +218,9 @@ export const customRandom = (alphabet, defaultSize, getRandom) => {
 const HEX_POOL_TARGET = 65536
 
 // Custom alphabet factory. Refill tier picked once at factory time: exact hex →
-// native toString('hex'); pow-2 length → bulk translate; else bulk rejection
-// sampling. Hot path: one cPool.substring per call. Also powers slugId/shortId.
+// native toString('hex'); pow-2 length → bulk translate; else 16-bit double-digit
+// rejection sampling (byte-wise for the few lengths where that yields more).
+// Hot path: one cPool.substring per call. Also powers slugId/shortId.
 export const customAlphabet = (alphabet, defaultSize = 21) => {
   const codes = validateAlphabet(alphabet)
   const len = alphabet.length
@@ -285,8 +286,81 @@ export const customAlphabet = (alphabet, defaultSize = 21) => {
     }
   }
 
-  // Tier 3: non-power-of-2 — bulk fill a rejection scratch once, accept in a
-  // single pass. A rare statistical shortfall triggers one top-up pass.
+  // Tier 3a: non-power-of-2 — 16-bit double-digit rejection sampling. Each
+  // accepted uint16 v < lim (lim = largest multiple of len² ≤ 65536) encodes
+  // TWO uniform, independent digits: v % len and (v / len | 0) % len — v is
+  // uniform on [0, lim) and lim is a multiple of len², so the (d1, d2) pair is
+  // exactly uniform. Roughly doubles the chars per CSPRNG byte AND halves the
+  // accept-loop iterations vs byte-wise rejection.
+  const len2 = len * len
+  const lim = 65536 - (65536 % len2)
+  // Yield comparison, chars/byte: u16 pair = lim/65536 vs byte-reject = len/256.
+  // For len in [182, 255], floor(65536/len²) = 1 makes the pair yield worse —
+  // those alphabets keep the byte-wise tier (3b) below.
+  if (lim > len * 256) {
+    // u16 elements per pass: enough for CPOOL_TARGET/2 accepted pairs with 1.6x
+    // headroom, capped at 32768 u16 = 65536 bytes (webcrypto fill quota).
+    const passU16 = Math.min(32768, Math.ceil((1.6 * (CPOOL_TARGET >> 1) * 65536) / lim))
+    // Scratch typed arrays own their ArrayBuffers (offset 0): a Uint16Array view
+    // over a pooled Buffer could land on an odd byteOffset and throw. Native
+    // endianness is fine — both digits come from the SAME u16, so byte order
+    // only permutes which byte pair produced which v, never the distribution.
+    let scratch16 // lazily allocated alongside `raw`
+    return (size = defaultSize) => {
+      size |= 0
+      if (size <= 0) return ''
+      // Cold path for huge requests: local buffers, don't touch the cached cPool.
+      if (size > CPOOL_TARGET) {
+        const out = Buffer.allocUnsafe(size)
+        const local16 = new Uint16Array(passU16)
+        let n = 0
+        while (n < size) {
+          fillBuffer(local16)
+          for (let i = 0; i < passU16 && n < size; i++) {
+            const v = local16[i]
+            if (v < lim) {
+              out[n++] = codes[v % len]
+              // Odd-size tail: drop d2 (d1 alone is still uniform) instead of
+              // relying on a silent out-of-bounds no-op that would desync n.
+              if (n < size) out[n++] = codes[((v / len) | 0) % len]
+            }
+          }
+        }
+        return out.toString('latin1')
+      }
+      if (cPoolOffset + size > cPool.length) {
+        if (!raw) {
+          raw = Buffer.allocUnsafe(passU16 * 2)
+          scratch16 = new Uint16Array(passU16)
+        }
+        const rawCap = passU16 * 2
+        let n = 0
+        while (n < CPOOL_TARGET) {
+          fillBuffer(scratch16)
+          // n only moves in steps of 2 and rawCap is even, so n < rawCap
+          // guarantees room for the whole pair — a top-up pass after a rare
+          // shortfall can never write past `raw`.
+          for (let i = 0; i < passU16 && n < rawCap; i++) {
+            const v = scratch16[i]
+            if (v < lim) {
+              raw[n] = codes[v % len]
+              raw[n + 1] = codes[((v / len) | 0) % len]
+              n += 2
+            }
+          }
+        }
+        cPool = raw.toString('latin1', 0, n)
+        cPoolOffset = 0
+      }
+      const start = cPoolOffset
+      cPoolOffset += size
+      return cPool.substring(start, cPoolOffset)
+    }
+  }
+
+  // Tier 3b: byte-wise bulk rejection for len in [182, 255] — bulk fill a
+  // rejection scratch once, accept in a single pass. A rare statistical
+  // shortfall triggers one top-up pass.
   const passLen = rejectionScratchLen(mask, len)
   let scratch // lazily allocated alongside `raw`
   return (size = defaultSize) => {
@@ -580,8 +654,17 @@ const UUID_POOL_COUNT = 1820
 const UUID_POOL_BYTES = UUID_POOL_COUNT * 36
 
 // byte → both hex char codes packed for one 16-bit LE store; DataView because
-// hyphen offsets leave half the pairs unaligned. Built lazily with the pool.
+// hyphen offsets leave half the pairs unaligned. Built lazily, shared by the
+// uuid() and uuidv7() pool refills.
 let HEX16_LE = null
+const ensureHex16 = () => {
+  if (HEX16_LE === null) {
+    HEX16_LE = new Uint16Array(256)
+    for (let b = 0; b < 256; b++) HEX16_LE[b] = HEX_HI[b] | (HEX_LO[b] << 8)
+  }
+  return HEX16_LE
+}
+
 let uuidPool, uuidPoolView, uuidPoolStr, uuidPoolOffset, uuidRawScratch
 export const uuid = () => {
   if (!uuidPool || uuidPoolOffset >= UUID_POOL_BYTES) {
@@ -593,8 +676,7 @@ export const uuid = () => {
         uuidPool[o + 8] = uuidPool[o + 13] = uuidPool[o + 18] = uuidPool[o + 23] = 0x2d
       }
       uuidRawScratch = Buffer.allocUnsafe(UUID_POOL_COUNT * 16)
-      HEX16_LE = new Uint16Array(256)
-      for (let b = 0; b < 256; b++) HEX16_LE[b] = HEX_HI[b] | (HEX_LO[b] << 8)
+      ensureHex16()
     }
     fillBuffer(uuidRawScratch)
     const raw = uuidRawScratch
@@ -688,32 +770,63 @@ export const distributedId = (size = 25) => {
 
 // === UUID v7 (RFC 9562) - time-ordered, index-friendly ===
 
-// Shared pooled hex string: 32768 CSPRNG bytes → 65536 hex chars per refill,
-// served as substrings. Used for uuidv7's random tail chars.
-let hexPoolStr = '', hexPoolOffset = 0, hexPoolRaw
-const hexTail = n => {
-  if (hexPoolOffset + n > hexPoolStr.length) {
-    if (!hexPoolRaw) hexPoolRaw = Buffer.allocUnsafe(32768)
-    fillBuffer(hexPoolRaw)
-    hexPoolStr = hexPoolRaw.toString('hex')
-    hexPoolOffset = 0
+// Pre-formatted tail pool: 2048 entries × 21 chars ("xxx-yxxx-xxxxxxxxxxxx" —
+// hyphens and the '89ab' variant already baked in), one 43008-char latin1
+// string per refill. Each entry consumes 10 CSPRNG bytes for its 74 random
+// bits (12 rand_a + 2 variant + 60 rand_b, per RFC 9562), so a call is the
+// cached ms prefix + ONE 21-char substring instead of a 6-piece concat.
+const V7_TAIL_COUNT = 2048
+const V7_TAIL_LEN = 21
+const V7_POOL_CHARS = V7_TAIL_COUNT * V7_TAIL_LEN // 43008
+// Variant from 2 raw CSPRNG bits — uniform over '89ab' char codes.
+const V7_VARIANT_CODES = /* @__PURE__ */ Uint8Array.from('89ab', c => c.charCodeAt(0))
+
+let v7Pool, v7PoolView, v7Raw, v7PoolStr = ''
+let v7PoolOffset = V7_POOL_CHARS // force a refill on the first call
+
+const fillV7Pool = () => {
+  if (!v7Pool) {
+    v7Pool = Buffer.allocUnsafe(V7_POOL_CHARS)
+    v7PoolView = new DataView(v7Pool.buffer, v7Pool.byteOffset, V7_POOL_CHARS)
+    v7Raw = Buffer.allocUnsafe(V7_TAIL_COUNT * 10)
+    // Hyphens are baked once at allocation; refills never write o+3 / o+8.
+    for (let k = 0; k < V7_TAIL_COUNT; k++) {
+      const o = k * V7_TAIL_LEN
+      v7Pool[o + 3] = 0x2d
+      v7Pool[o + 8] = 0x2d
+    }
+    ensureHex16()
   }
-  const start = hexPoolOffset
-  hexPoolOffset += n
-  return hexPoolStr.substring(start, hexPoolOffset)
+  fillBuffer(v7Raw)
+  const dv = v7PoolView
+  const hx = HEX16_LE
+  const raw = v7Raw
+  const pool = v7Pool
+  for (let k = 0; k < V7_TAIL_COUNT; k++) {
+    const ri = k * 10
+    const o = k * V7_TAIL_LEN
+    // rand_a: b0's 8 bits + b1's high nibble (chars 0-2); variant: b1's low
+    // 2 bits (independent of the nibble above); rand_b: b2 + b3's high nibble
+    // (chars 5-7) + b4..b9 (chars 9-20). b3's low nibble is discarded.
+    dv.setUint16(o, hx[raw[ri]], true)
+    pool[o + 2] = HEX_HI[raw[ri + 1]]
+    pool[o + 4] = V7_VARIANT_CODES[raw[ri + 1] & 3]
+    dv.setUint16(o + 5, hx[raw[ri + 2]], true)
+    pool[o + 7] = HEX_HI[raw[ri + 3]]
+    dv.setUint16(o + 9, hx[raw[ri + 4]], true)
+    dv.setUint16(o + 11, hx[raw[ri + 5]], true)
+    dv.setUint16(o + 13, hx[raw[ri + 6]], true)
+    dv.setUint16(o + 15, hx[raw[ri + 7]], true)
+    dv.setUint16(o + 17, hx[raw[ri + 8]], true)
+    dv.setUint16(o + 19, hx[raw[ri + 9]], true)
+  }
+  v7PoolStr = pool.toString('latin1')
+  v7PoolOffset = 0
 }
 
-// Variant pick keyed by the hex char's VALUE (a raw code&3 would bias via the
-// 0-9/a-f code gap): uniform over '89ab'.
-const VARIANT_FROM_HEX_CODE = /* @__PURE__ */ (() => {
-  const table = new Array(256).fill('8')
-  const hex = '0123456789abcdef'
-  for (let v = 0; v < 16; v++) table[hex.charCodeAt(v)] = '89ab'[v & 3]
-  return table
-})()
-
 // UUID v7: 48-bit ms timestamp + version + variant + 74 random bits. The
-// 15-char "tttttttt-tttt-7" prefix is cached per ms; pooled hex fills the rest.
+// 15-char "tttttttt-tttt-7" prefix is cached per ms; the pre-formatted pool
+// supplies the remaining 21 chars in one substring.
 let v7LastMs = -1
 let v7Prefix = ''
 export const uuidv7 = () => {
@@ -726,12 +839,10 @@ export const uuidv7 = () => {
       byteToHex[(lo >>> 24) & 0xff] + byteToHex[(lo >>> 16) & 0xff] + '-' +
       byteToHex[(lo >>> 8) & 0xff] + byteToHex[lo & 0xff] + '-7'
   }
-  const r = hexTail(19)
-  // r[0] seeds the variant pick; r[1..18] are the 18 random hex chars
-  // (12 rand_a bits after the version + 60 of rand_b; variant supplies 2 more).
-  return v7Prefix + r.substring(1, 4) + '-' +
-    VARIANT_FROM_HEX_CODE[r.charCodeAt(0)] + r.substring(4, 7) + '-' +
-    r.substring(7, 19)
+  if (v7PoolOffset >= V7_POOL_CHARS) fillV7Pool()
+  const start = v7PoolOffset
+  v7PoolOffset += V7_TAIL_LEN
+  return v7Prefix + v7PoolStr.substring(start, v7PoolOffset)
 }
 
 // === ULID (spec-compliant, 26 chars: 10 timestamp + 16 random, Crockford Base32) ===
@@ -739,15 +850,34 @@ export const uuidv7 = () => {
 // Module-level scratch buffer for encoding the 10-char ULID timestamp prefix.
 const ULID_BUF = /* @__PURE__ */ Buffer.allocUnsafe(10)
 
-// Pooled Crockford string for ulid()'s 16 random chars (byte & 31 — bias-free, 256/32=8).
-let crockPoolStr = '', crockPoolOffset = 0, crockPoolRaw
+// Pooled Crockford string for ulid()'s 16 random chars. The refill repacks each
+// 32-bit CSPRNG word into SIX 5-bit digits (top 2 bits discarded) — bias-free
+// (every 5-bit slice of a uniform word is uniform) with 1/4 the loop iterations
+// and 2/3 the CSPRNG bytes of a one-byte-per-char map, and a 49152-char pool.
+// The scratch owns its ArrayBuffer (offset 0) so the u32 view is always aligned.
+let crockPoolStr = '', crockPoolOffset = 0, crockScratch32, crockPoolOut
 const crockTail = n => {
   if (crockPoolOffset + n > crockPoolStr.length) {
-    if (!crockPoolRaw) crockPoolRaw = Buffer.allocUnsafe(32768)
-    fillBuffer(crockPoolRaw)
-    const raw = crockPoolRaw
-    for (let i = 0; i < 32768; i++) raw[i] = CROCKFORD_CODES[raw[i] & 31]
-    crockPoolStr = raw.toString('latin1')
+    if (!crockScratch32) {
+      crockScratch32 = new Uint32Array(8192) // 32768 CSPRNG bytes per refill
+      crockPoolOut = Buffer.allocUnsafe(49152)
+    }
+    fillBuffer(crockScratch32)
+    const src = crockScratch32
+    const out = crockPoolOut
+    const codes = CROCKFORD_CODES
+    let p = 0
+    for (let i = 0; i < 8192; i++) {
+      const v = src[i]
+      out[p] = codes[v & 31]
+      out[p + 1] = codes[(v >>> 5) & 31]
+      out[p + 2] = codes[(v >>> 10) & 31]
+      out[p + 3] = codes[(v >>> 15) & 31]
+      out[p + 4] = codes[(v >>> 20) & 31]
+      out[p + 5] = codes[(v >>> 25) & 31]
+      p += 6
+    }
+    crockPoolStr = out.toString('latin1')
     crockPoolOffset = 0
   }
   const start = crockPoolOffset
@@ -1228,39 +1358,43 @@ let counterTailCharCode = FIRST_CHAR_CODE
 
 // Random pool: rejection-sampled Base58 codes, one string per refill; the hot
 // path serves 8 chars via substring (same trick as nopeid()'s idPoolStr).
+// The refill uses 16-bit double-digit sampling: each uint16 v < B58_LIM (the
+// largest multiple of 58² ≤ 65536) yields TWO uniform digits — v is uniform on
+// [0, B58_LIM) — nearly doubling chars per CSPRNG byte vs byte-wise rejection.
 const ORDERED_RND_POOL_SIZE = 16384
-const RND_LOOKUP = /* @__PURE__ */ (() => {
-  const t = new Uint8Array(256)
-  for (let i = 0; i < 256; i++) {
-    const v = i & 63
-    t[i] = v < 58 ? BASE58_ALPHABET.charCodeAt(v) : 0
-  }
-  return t
-})()
+const B58_LIM = 63916 // 58² × 19
+const BASE58_CODES = /* @__PURE__ */ Uint8Array.from(BASE58_ALPHABET, c => c.charCodeAt(0))
 
-let orderedRndRaw
+let orderedRndScratch16
 let orderedRndCharCodes
 let orderedRndPoolStr = ''
 let orderedRndCount = 0
 let orderedRndPosition = 0
 
 const refillRandom = () => {
-  if (!orderedRndRaw) {
-    orderedRndRaw = Buffer.allocUnsafe(ORDERED_RND_POOL_SIZE)
+  if (!orderedRndScratch16) {
+    // Owns its ArrayBuffer (offset 0) so the u16 view is always aligned.
+    orderedRndScratch16 = new Uint16Array(ORDERED_RND_POOL_SIZE >> 1)
     orderedRndCharCodes = Buffer.allocUnsafe(ORDERED_RND_POOL_SIZE)
   }
-  fillBuffer(orderedRndRaw)
-  const raw = orderedRndRaw
+  fillBuffer(orderedRndScratch16)
+  const src = orderedRndScratch16
   const out = orderedRndCharCodes
-  const lookup = RND_LOOKUP
+  const codes = BASE58_CODES
   let count = 0
-  for (let i = 0; i < ORDERED_RND_POOL_SIZE; i++) {
-    const cc = lookup[raw[i]]
-    if (cc !== 0) out[count++] = cc
+  // count moves in steps of 2 and caps at 8192 pairs = the out capacity, so
+  // the pair write can never overrun.
+  for (let i = 0; i < 8192; i++) {
+    const v = src[i]
+    if (v < B58_LIM) {
+      out[count] = codes[v % 58]
+      out[count + 1] = codes[((v / 58) | 0) % 58]
+      count += 2
+    }
   }
   orderedRndCount = count
-  // One Buffer.toString per ~16K calls; orderedRndCharCodes stays available as
-  // a Uint8Array for seedCounter(), which needs raw char codes.
+  // One Buffer.toString per refill; orderedRndCharCodes stays available as
+  // a byte view for seedCounter(), which needs raw char codes.
   orderedRndPoolStr = out.toString('latin1', 0, count)
   orderedRndPosition = 0
 }

@@ -105,6 +105,29 @@ describe('customAlphabet tier 3 (non-pow-2 bulk rejection)', () => {
     assert.match(big, /^[1-9A-HJ-NP-Za-km-z]+$/)
   })
 
+  test('non-pow-2 cold path with an ODD size: exact length (no pair-write overrun)', () => {
+    const gen = customAlphabet(alphabets.base58, 21)
+    const big = gen(40001)
+    assert.equal(big.length, 40001)
+    assert.match(big, /^[1-9A-HJ-NP-Za-km-z]+$/)
+  })
+
+  test('large non-pow-2 alphabet (len 200, byte-wise sub-tier): length, charset, coverage', () => {
+    // len in [182, 255] keeps byte-wise rejection (better yield than u16 pairs)
+    let big200 = ''
+    for (let i = 0; i < 200; i++) big200 += String.fromCharCode(0x21 + i)
+    const gen = customAlphabet(big200, 16)
+    const seen = new Set()
+    for (let i = 0; i < 5000; i++) {
+      const id = gen()
+      assert.equal(id.length, 16)
+      for (const ch of id) seen.add(ch)
+    }
+    assert.equal(seen.size, 200)
+    const cold = gen(40001)
+    assert.equal(cold.length, 40001)
+  })
+
   test('rejection tier: NaN/huge sizes return "" and leave the pool healthy', () => {
     const gen = customAlphabet(alphabets.base58, 21)
     assert.equal(gen(NaN), '')
