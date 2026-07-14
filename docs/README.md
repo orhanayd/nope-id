@@ -1123,7 +1123,7 @@ npm run test:randomness
 > Run `npm run benchmark` locally to see numbers on your own machine.
 
 <!-- bench:meta:start -->
-_Last refreshed: 2026-07-13, Node v26.x, ubuntu-latest (GitHub Actions)._
+_Last refreshed: 2026-07-14, Node v26.x, ubuntu-latest (GitHub Actions)._
 <!-- bench:meta:end -->
 
 ### nope-id vs nanoid Benchmark
@@ -1141,11 +1141,11 @@ npm run benchmark
 <!-- bench:comparison-table:start -->
 | Test | nanoid 6.0.0 | nope-id | Winner |
 |------|--------|---------|--------|
-| Basic (21 chars) | ~29M ops/sec | **~60.7M ops/sec** | **nope-id ~2.1x** |
-| Small (10 chars) | ~37.9M ops/sec | **~56.4M ops/sec** | **nope-id ~1.5x** |
-| Large (64 chars) | ~11.7M ops/sec | **~36.9M ops/sec** | **nope-id ~3.1x** |
-| Custom Alphabet | ~34.7M ops/sec | **~73.9M ops/sec** | **nope-id ~2.1x** |
-| Batch (100 IDs) | ~272K ops/sec | **~817K ops/sec** | **nope-id ~3x** |
+| Basic (21 chars) | ~26.5M ops/sec | **~57.9M ops/sec** | **nope-id ~2.2x** |
+| Small (10 chars) | ~35.5M ops/sec | **~52.3M ops/sec** | **nope-id ~1.5x** |
+| Large (64 chars) | ~10.6M ops/sec | **~34M ops/sec** | **nope-id ~3.2x** |
+| Custom Alphabet | ~32.1M ops/sec | **~66.2M ops/sec** | **nope-id ~2.1x** |
+| Batch (100 IDs) | ~246K ops/sec | **~702K ops/sec** | **nope-id ~2.9x** |
 <!-- bench:comparison-table:end -->
 
 **Result: nope-id wins 5/5 against nanoid** for URL-safe IDs, while providing many extra features and security hardening.
@@ -1177,12 +1177,12 @@ A benchmark is only meaningful against more than one tool (thanks to nanoid's au
 <!-- bench:uuid-table:start -->
 | Generator | ops/sec | |
 |---|---|---|
-| `crypto.randomUUID()` (Node native, v4) | ~20.4M | C++ binding (plain v4 only) |
-| nope-id `uuid()` (v4) | **~33.3M** | 🥇 fastest pure-JS v4 |
-| `@lukeed/uuid` `v4()` | ~7.2M | optimized pure-JS v4 |
-| `uuid` package `v4()` | ~6.0M | |
-| nope-id `uuidv7()` | ~8.6M | **~20x the `uuid` package's v7** |
-| `uuid` package `v7()` | ~424K | |
+| `crypto.randomUUID()` (Node native, v4) | ~21.6M | C++ binding (plain v4 only) |
+| nope-id `uuid()` (v4) | **~30.4M** | 🥇 fastest pure-JS v4 |
+| `@lukeed/uuid` `v4()` | ~6.7M | optimized pure-JS v4 |
+| `uuid` package `v4()` | ~5.8M | |
+| nope-id `uuidv7()` | ~9.4M | **~20x the `uuid` package's v7** |
+| `uuid` package `v7()` | ~477K | |
 <!-- bench:uuid-table:end -->
 
 **Honest take:** nope-id's `uuid()` pre-formats 4096 v4 UUIDs per CSPRNG refill, so each call is just a `substring()`. Result: at least on par with native `crypto.randomUUID()`, and ahead of it in current CI. The two trade places on real hardware (shared CSPRNG entropy path plus runner noise), so treat them as effectively tied for speed. If a plain v4 UUID is *all* you need and you do not want a dependency, the stdlib does the job. But if you are already using nope-id for anything else (UUIDv7, ULID, Snowflake, ObjectId, Sqids, typed IDs, nanoid-style short IDs, or just faster URL-safe IDs than nanoid), there is no reason to reach for native; `uuid()` is at least as fast, dual-module, and zero-dependency.
@@ -1196,10 +1196,10 @@ nope-id ships a spec-compliant `ulid()` plus an isolated `monotonicFactory()`. S
 <!-- bench:ulid-table:start -->
 | Generator | ops/sec |
 |---|---|
-| nope-id `ulid()` | **~12.9M** |
-| `ulid` package | ~30K |
-| nope-id `monotonicFactory()` | **~7.4M** |
-| `ulid` package (monotonic) | ~2.1M |
+| nope-id `ulid()` | **~14M** |
+| `ulid` package | ~35K |
+| nope-id `monotonicFactory()` | **~8.2M** |
+| `ulid` package (monotonic) | ~2.9M |
 <!-- bench:ulid-table:end -->
 
 nope-id is far faster for plain `ulid()` because it draws randomness from a pooled buffer (one fill per 16 IDs), whereas the `ulid` package fetches randomness per character. Decode the timestamp from either with `decodeTime()`. (The `ulid` package is also zero-dependency.)
@@ -1211,8 +1211,8 @@ Both are CSPRNG-backed, time-sortable + monotonic generators with similar intern
 <!-- bench:sortable-table:start -->
 | Generator | ops/sec |
 |---|---|
-| nope-id `sortableId()` (22-char Crockford) | **~13.7M** |
-| `sparkid` (21-char Base58) | ~10.4M |
+| nope-id `sortableId()` (22-char Crockford) | **~14.2M** |
+| `sparkid` (21-char Base58) | ~10.7M |
 <!-- bench:sortable-table:end -->
 
 ### Speed vs entropy: where each library lands
@@ -1222,13 +1222,13 @@ Two things matter for an id generator: **speed** and **entropy**, the amount of 
 <!-- bench:speed-vs-entropy-table:start -->
 | Generator | ops/sec | entropy / id | randomness source |
 |---|---|---|---|
-| **nope-id `nopeid()`** | **~60.7M** | **~126 bits (64-char URL-safe)** | **CSPRNG** |
-| `uid/secure` | ~6.3M | ~84 bits (16-char hex) | CSPRNG |
-| nanoid | ~29M | ~126 bits (64-char URL-safe) | CSPRNG |
-| `sparkid` | ~10.4M | ~76 bits random (Base58, time-sortable) | CSPRNG |
-| `rndm` | ~2.9M | ~125 bits, but predictable | `Math.random` (not secure) |
-| `secure-random-string` | ~368K | ~126 bits (base64, not URL-safe) | CSPRNG |
-| cuid2 `createId()` | ~5.8K | 24-char, hash-derived | CSPRNG + SHA-3 |
+| **nope-id `nopeid()`** | **~57.9M** | **~126 bits (64-char URL-safe)** | **CSPRNG** |
+| `uid/secure` | ~6.2M | ~84 bits (16-char hex) | CSPRNG |
+| nanoid | ~26.5M | ~126 bits (64-char URL-safe) | CSPRNG |
+| `sparkid` | ~10.7M | ~76 bits random (Base58, time-sortable) | CSPRNG |
+| `rndm` | ~2.8M | ~125 bits, but predictable | `Math.random` (not secure) |
+| `secure-random-string` | ~426K | ~126 bits (base64, not URL-safe) | CSPRNG |
+| cuid2 `createId()` | ~5.5K | 24-char, hash-derived | CSPRNG + SHA-3 |
 <!-- bench:speed-vs-entropy-table:end -->
 
 Read as two axes, **speed** and **security**, every other library gives something up on one of them:
@@ -1238,7 +1238,7 @@ Read as two axes, **speed** and **security**, every other library gives somethin
 - **`secure-random-string`** matches nope-id's entropy but is roughly 80x slower and emits base64 (not URL-safe).
 - **cuid2** spends speed on purpose for a hardened, sharding-safe, hash-based model.
 - **`sparkid`** is CSPRNG-backed, time-sortable + monotonic, and very fast in its niche; it spends 8 of its 21 chars on a Base58 timestamp prefix, leaving ~76 bits of unguessable randomness per id (close to ULID territory). If you want **maximum randomness per id**, nope-id's `nopeid()` keeps the full 126 bits at the same length. If you specifically want **sortable + monotonic**, sparkid holds its own (see the head-to-head above); nope-id also offers `sortableId()`, `ulid()`, and `monotonicFactory()` for ULID-compatible 26-char Crockford output.
-- **nanoid** matches nope-id's entropy exactly (same 64-char alphabet); nope-id is simply <!-- bench:basic-21-ratio:start -->~2.1x<!-- bench:basic-21-ratio:end --> faster at the default 21-char size.
+- **nanoid** matches nope-id's entropy exactly (same 64-char alphabet); nope-id is simply <!-- bench:basic-21-ratio:start -->~2.2x<!-- bench:basic-21-ratio:end --> faster at the default 21-char size.
 
 nope-id is the one row that has **all three at once**: maximum entropy per character (126 bits), a real CSPRNG, and top-tier speed. That is the whole design goal, fast without ever spending randomness to get there. (For a plain v4 UUID, native `crypto.randomUUID()` is roughly tied with nope-id's `uuid()` at 122 bits in C++; reach for the stdlib if a v4 UUID is all you need and you do not want a dependency.)
 
@@ -1249,18 +1249,18 @@ These features are exclusive to nope-id (nanoid doesn't have them):
 <!-- bench:extras-table:start -->
 | Feature | Performance |
 |---------|-------------|
-| `sortableId()` | ~13.7M ops/sec |
-| `prefixedId()` | ~38.3M ops/sec |
-| `uuid()` | ~33M ops/sec |
-| `slugId()` | ~8.2M ops/sec |
-| `shortId()` | ~17.8M ops/sec |
-| `isValid()` | ~15.2M ops/sec |
-| `uuidv7()` | ~8.5M ops/sec |
-| `ulid()` | ~13M ops/sec |
-| `monotonicFactory()` | ~7.2M ops/sec |
+| `sortableId()` | ~14.2M ops/sec |
+| `prefixedId()` | ~36.4M ops/sec |
+| `uuid()` | ~31.1M ops/sec |
+| `slugId()` | ~7.2M ops/sec |
+| `shortId()` | ~15.8M ops/sec |
+| `isValid()` | ~13.9M ops/sec |
+| `uuidv7()` | ~9.0M ops/sec |
+| `ulid()` | ~13.8M ops/sec |
+| `monotonicFactory()` | ~8.4M ops/sec |
 | `snowflake` (factory) | ~4.1M ops/sec |
-| `objectId()` | ~14.5M ops/sec |
-| `sqids.encode()` | ~216K ops/sec |
+| `objectId()` | ~15.4M ops/sec |
+| `sqids.encode()` | ~208K ops/sec |
 <!-- bench:extras-table:end -->
 
 ---
