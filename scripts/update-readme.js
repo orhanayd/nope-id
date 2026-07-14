@@ -1,6 +1,7 @@
 // scripts/update-readme.js
-// Refresh README.md (and translated mirrors README.tr.md, README.ru.md) from a
-// benchmark JSON file.
+// Refresh the slim root README.md (headline region only) and the full docs
+// READMEs — docs/README.md, docs/README.tr.md, docs/README.ru.md (all
+// regions) — from a benchmark JSON file.
 // Usage: node scripts/update-readme.js <bench.json>
 //
 // Each auto-managed region in a README is bracketed by HTML comment markers:
@@ -280,13 +281,20 @@ const mkReplace = readme => (name, body, { inline = false } = {}) => {
 
 // === Per-file refresh ===
 
-const refresh = (filePath, loc) => {
+const refresh = (filePath, loc, markers) => {
   if (!existsSync(filePath)) {
     console.error(`skip (not found): ${filePath}`)
     return false
   }
   const readme = { value: readFileSync(filePath, 'utf8') }
-  const replaceRegion = mkReplace(readme)
+  const replaceAll = mkReplace(readme)
+  // Per-target region scoping: when a target lists `markers`, only those
+  // regions are refreshed in that file (the others are not expected there).
+  // A LISTED region whose marker pair is missing still throws inside
+  // mkReplace — the loud-failure contract is unchanged, just scoped.
+  const replaceRegion = markers
+    ? (name, body, opts) => { if (markers.includes(name)) replaceAll(name, body, opts) }
+    : replaceAll
 
   // === Headline range (e.g. "5x to 8x") ===
   // Build "Nx to Mx" from the spread of comparison ratios. Honesty policy
@@ -469,14 +477,18 @@ const refresh = (filePath, loc) => {
   return true
 }
 
+const DOCS = join(REPO_ROOT, 'docs')
 const TARGETS = [
-  { path: join(REPO_ROOT, 'README.md'),    locale: 'en' },
-  { path: join(REPO_ROOT, 'README.tr.md'), locale: 'tr' },
-  { path: join(REPO_ROOT, 'README.ru.md'), locale: 'ru' },
+  // Slim root README carries ONLY the live headline bullet; every other
+  // bench region lives in the full docs/ READMEs.
+  { path: join(REPO_ROOT, 'README.md'), locale: 'en', markers: ['headline'] },
+  { path: join(DOCS, 'README.md'),      locale: 'en' },
+  { path: join(DOCS, 'README.tr.md'),   locale: 'tr' },
+  { path: join(DOCS, 'README.ru.md'),   locale: 'ru' },
 ]
 
 let updated = 0
 for (const t of TARGETS) {
-  if (refresh(t.path, L[t.locale])) updated++
+  if (refresh(t.path, L[t.locale], t.markers)) updated++
 }
 console.error(`Updated ${updated}/${TARGETS.length} README files.`)
