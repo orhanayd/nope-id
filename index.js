@@ -286,12 +286,10 @@ export const customAlphabet = (alphabet, defaultSize = 21) => {
     }
   }
 
-  // Tier 3a: non-power-of-2 — 16-bit double-digit rejection sampling. Each
-  // accepted uint16 v < lim (lim = largest multiple of len² ≤ 65536) encodes
-  // TWO uniform, independent digits: v % len and (v / len | 0) % len — v is
-  // uniform on [0, lim) and lim is a multiple of len², so the (d1, d2) pair is
-  // exactly uniform. Roughly doubles the chars per CSPRNG byte AND halves the
-  // accept-loop iterations vs byte-wise rejection.
+  // Tier 3a: non-power-of-2 — 16-bit double-digit rejection. Each accepted uint16
+  // v < lim (largest multiple of len² ≤ 65536) yields TWO exactly-uniform digits
+  // (v % len, (v/len|0) % len): ~2x chars per CSPRNG byte, half the accept-loop
+  // iterations vs byte-wise rejection.
   const len2 = len * len
   const lim = 65536 - (65536 % len2)
   // Yield comparison, chars/byte: u16 pair = lim/65536 vs byte-reject = len/256.
@@ -301,10 +299,9 @@ export const customAlphabet = (alphabet, defaultSize = 21) => {
     // u16 elements per pass: enough for CPOOL_TARGET/2 accepted pairs with 1.6x
     // headroom, capped at 32768 u16 = 65536 bytes (webcrypto fill quota).
     const passU16 = Math.min(32768, Math.ceil((1.6 * (CPOOL_TARGET >> 1) * 65536) / lim))
-    // Scratch typed arrays own their ArrayBuffers (offset 0): a Uint16Array view
-    // over a pooled Buffer could land on an odd byteOffset and throw. Native
-    // endianness is fine — both digits come from the SAME u16, so byte order
-    // only permutes which byte pair produced which v, never the distribution.
+    // Scratch arrays own their ArrayBuffers (a u16 view over a pooled Buffer could
+    // land on an odd byteOffset and throw). Endianness is irrelevant: both digits
+    // come from the SAME u16, so byte order never changes the distribution.
     let scratch16 // lazily allocated alongside `raw`
     return (size = defaultSize) => {
       size |= 0
@@ -579,11 +576,9 @@ const validTableFor = alphabet => {
   return table
 }
 
-// Validate a string against an alphabet. Non-short-circuit table scan (avoids the
-// naive first-bad-char timing oracle; NOT strictly constant-time); charCodeAt +
-// table beats Set.has per-char allocation. The table loop is 4-wide unrolled;
-// chars > 255 read past the table (undefined) and zero `valid` via `&`, exactly
-// like the single-step loop.
+// Validate a string against an alphabet. Non-short-circuit 4-wide table scan
+// (avoids the naive first-bad-char timing oracle; NOT strictly constant-time);
+// chars > 255 read past the table (undefined) and zero `valid` via `&`.
 export const isValid = (id, alphabet = urlAlphabet) => {
   if (typeof id !== 'string' || id.length === 0) return false
 
@@ -629,10 +624,8 @@ export const collisionProbability = (idLength, alphabetSize = 64) => {
   return {
     totalPossible: possibleIds,
     totalPossibleBigInt: possibleIdsBig,
-    // Probability of collision when generating 1 billion IDs.
-    // -Math.expm1(x) computes 1 - exp(x) accurately for x near 0 (which is the
-    // common case for safe id sizes); the naive 1 - exp(x) form loses precision
-    // and reports 0 when exp(x) rounds to 1.
+    // Probability of collision at 1 billion IDs: -Math.expm1(x) = 1 - exp(x)
+    // accurately near 0 (the naive form rounds to literal 0 for safe id sizes).
     probabilityForBillion: -Math.expm1((-1e9 * (1e9 - 1)) / (2 * possibleIdsExact)),
     // Safe count before 50% collision probability
     safeCount: Math.sqrt(2 * possibleIdsExact * Math.log(2)),
@@ -646,10 +639,9 @@ export const nopeidAsync = async (size = 21) => {
   return nopeid(size)
 }
 
-// UUID v4 pool: pre-formatted 1820-slot refill (own 16 CSPRNG bytes per UUID,
-// v4/variant bits patched, hyphens pre-baked); one 36-char substring per call.
-// 1820 slots keep the pool string at 65520 chars — under V8's large-string
-// allocation cliff (a 4096-slot / 147KB string measurably slowed refills).
+// UUID v4 pool: 1820 pre-formatted slots (own 16 CSPRNG bytes per UUID, v4/variant
+// patched, hyphens pre-baked); one 36-char substring per call. 1820 keeps the pool
+// string at 65520 chars, under V8's large-string cliff (147KB measurably slower).
 const UUID_POOL_COUNT = 1820
 const UUID_POOL_BYTES = UUID_POOL_COUNT * 36
 
@@ -685,10 +677,9 @@ export const uuid = () => {
     for (let k = 0; k < UUID_POOL_COUNT; k++) {
       const ri = k << 4
       const oo = k * 36
-      // Patch version (4) into byte 6 and RFC 4122 variant into byte 8, then
-      // write each ADJACENT PAIR of bytes' four hex chars with a single 32-bit
-      // store (the pre-baked hyphens split the 32 hex chars into 8 such runs;
-      // measured ~1.2x over per-byte 16-bit stores at this pool size).
+      // Patch v4 version (byte 6) + RFC 4122 variant (byte 8), then write each
+      // ADJACENT byte pair's four hex chars with one 32-bit store — 8 runs
+      // between the pre-baked hyphens (~1.2x over per-byte 16-bit stores).
       dv.setUint32(oo,      hx[raw[ri]]      | (hx[raw[ri + 1]]  << 16), true)
       dv.setUint32(oo + 4,  hx[raw[ri + 2]]  | (hx[raw[ri + 3]]  << 16), true)
       dv.setUint32(oo + 9,  hx[raw[ri + 4]]  | (hx[raw[ri + 5]]  << 16), true)
@@ -763,11 +754,9 @@ export const distributedId = (size = 25) => {
 
 // === UUID v7 (RFC 9562) - time-ordered, index-friendly ===
 
-// Pre-formatted tail pool: 2048 entries × 21 chars ("xxx-yxxx-xxxxxxxxxxxx" —
-// hyphens and the '89ab' variant already baked in), one 43008-char latin1
-// string per refill. Each entry consumes 10 CSPRNG bytes for its 74 random
-// bits (12 rand_a + 2 variant + 60 rand_b, per RFC 9562), so a call is the
-// cached ms prefix + ONE 21-char substring instead of a 6-piece concat.
+// Pre-formatted v7 tail pool: 2048 × 21 chars ("xxx-yxxx-xxxxxxxxxxxx", hyphens +
+// '89ab' variant baked in), one 43008-char string per refill; 10 CSPRNG bytes =
+// 74 random bits per entry (RFC 9562). A call = cached ms prefix + ONE substring.
 const V7_TAIL_COUNT = 2048
 const V7_TAIL_LEN = 21
 const V7_POOL_CHARS = V7_TAIL_COUNT * V7_TAIL_LEN // 43008
@@ -798,11 +787,9 @@ const fillV7Pool = () => {
   for (let k = 0; k < V7_TAIL_COUNT; k++) {
     const ri = k * 10
     const o = k * V7_TAIL_LEN
-    // rand_a: b0's 8 bits + b1's high nibble (chars 0-2); variant: b1's low
-    // 2 bits (independent of the nibble above); rand_b: b2 + b3's high nibble
-    // (chars 5-7) + b4..b9 (chars 9-20). b3's low nibble is discarded.
-    // Two folded 32-bit stores cover chars 0-2 + the '-' (rewritten with the
-    // same 0x2d) and the variant + chars 5-7.
+    // rand_a: b0 + b1's high nibble (chars 0-2); variant: b1's low 2 bits;
+    // rand_b: b2 + b3's high nibble (chars 5-7) + b4..b9 (chars 9-20); b3's low
+    // nibble discarded. Two folded 32-bit stores cover 0-2+'-' and variant+5-7.
     dv.setUint32(o, hx[raw[ri]] | (HEX_HI[raw[ri + 1]] << 16) | (0x2d << 24), true)
     dv.setUint32(o + 4,
       V7_VARIANT_CODES[raw[ri + 1] & 3] | (hx[raw[ri + 2]] << 8) | (HEX_HI[raw[ri + 3]] << 24), true)
@@ -843,11 +830,9 @@ export const uuidv7 = () => {
 // Module-level scratch buffer for encoding the 10-char ULID timestamp prefix.
 const ULID_BUF = /* @__PURE__ */ Buffer.allocUnsafe(10)
 
-// Pooled Crockford string for ulid()'s 16 random chars. The refill repacks each
-// 32-bit CSPRNG word into SIX 5-bit digits (top 2 bits discarded) — bias-free
-// (every 5-bit slice of a uniform word is uniform) with 1/4 the loop iterations
-// and 2/3 the CSPRNG bytes of a one-byte-per-char map, and a 49152-char pool.
-// The scratch owns its ArrayBuffer (offset 0) so the u32 view is always aligned.
+// Pooled Crockford string for ulid()'s 16 random chars: each 32-bit word repacks
+// into SIX bias-free 5-bit digits (top 2 bits discarded) — 1/4 the iterations,
+// 2/3 the CSPRNG bytes; 49152-char pool; scratch owns its buffer (aligned u32).
 let crockPoolStr = '', crockPoolOffset = 0, crockScratch32, crockPoolOut
 const crockTail = n => {
   if (crockPoolOffset + n > crockPoolStr.length) {
@@ -898,11 +883,9 @@ export const ulid = (seedTime = Date.now()) => {
   return ulidPrefix + crockTail(16)
 }
 
-// Monotonic ULID factory with ISOLATED state (does not touch global sortableId state).
-// Same/backwards-ms calls bump the random part as a base-32 counter. The hot path
-// (last digit not saturated) is a cached 25-char head + one tail char code — no
-// per-call Buffer→string conversion; the head is rebuilt only on digit carry or a
-// new timestamp.
+// Monotonic ULID factory with ISOLATED state (never touches global sortableId
+// state). Same/backwards-ms calls bump the random part as a base-32 counter; hot
+// path = cached 25-char head + one tail char code, head rebuilt only on carry/new ms.
 export const monotonicFactory = () => {
   let lastTime = NaN // NaN sentinel: <= matches no seed, so the first call always encodes
   let lastRand = []
@@ -1079,11 +1062,10 @@ export const sqidsFactory = (options = {}) => {
     throw new Error('Sqids alphabet must contain unique characters')
   }
 
-  // The whole codec works on arrays of UTF-16 code units (numbers) instead of
-  // per-char strings: the reference algorithm's split('')/join('')/unshift
-  // churn becomes in-place array ops, with one fromCharCode at the end. Code
-  // units match the reference's split('') semantics exactly (astral chars
-  // behave identically, as two independent units).
+  // The codec works on arrays of UTF-16 code units, not per-char strings: the
+  // reference's split('')/join/unshift churn becomes in-place array ops + one
+  // fromCharCode at the end. Code units match split('') semantics exactly
+  // (astral chars behave identically, as two independent units).
   const alphaLen = baseAlphabet.length
 
   // Deterministic shuffle (no PRNG; derived from the alphabet itself),
@@ -1386,11 +1368,9 @@ let timestampCachePrefix = ''        // 8-char Base58 ts (live)
 let prefixPlusCounterHead = ''       // 12-char string: ts + 4 counter head chars
 let counterTailCharCode = FIRST_CHAR_CODE
 
-// Random pool: rejection-sampled Base58 codes, one string per refill; the hot
-// path serves 8 chars via substring (same trick as nopeid()'s idPoolStr).
-// The refill uses 16-bit double-digit sampling: each uint16 v < B58_LIM (the
-// largest multiple of 58² ≤ 65536) yields TWO uniform digits — v is uniform on
-// [0, B58_LIM) — nearly doubling chars per CSPRNG byte vs byte-wise rejection.
+// Random pool: Base58 codes via the same 16-bit double-digit sampling as tier 3a
+// (uint16 v < B58_LIM yields two uniform digits); one string per refill, hot path
+// serves 8 chars via substring (same trick as nopeid()'s idPoolStr).
 const ORDERED_RND_POOL_SIZE = 16384
 const B58_LIM = 63916 // 58² × 19
 const BASE58_CODES = /* @__PURE__ */ Uint8Array.from(BASE58_ALPHABET, c => c.charCodeAt(0))

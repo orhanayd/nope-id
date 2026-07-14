@@ -35,19 +35,16 @@ const CROCKFORD_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
 // Powers the pooled refill in nopeid() below.
 const URL_ALPHABET_CODES = /* @__PURE__ */ Uint8Array.from(urlAlphabet, c => c.charCodeAt(0))
 
-// Cached latin1 decoder: one string allocation per pool refill instead of a
-// per-call String.fromCharCode chain. Only pure-ASCII pools use it, so the
-// windows-1252 remap of 0x80-0x9F that 'latin1' implies can never bite.
+// Cached latin1 decoder: one string per pool refill. Only pure-ASCII pools use
+// it, so the windows-1252 remap of 0x80-0x9F can never bite.
 const POOL_DECODER = /* @__PURE__ */ new TextDecoder('latin1')
 
 // Pool size shared by nopeid() and the ASCII customAlphabet() tier.
 const POOL_CHARS = 16384
 
-// Custom alphabet ID generator. Pure-ASCII alphabets (the overwhelmingly common
-// case — slugId/shortId included) get a pooled generator: each Math.random()
-// draw yields TWO digits via d = (r * len²) | 0 (a 52-bit double over
-// len² ≤ 65536 buckets), the pool becomes one decoded string, and calls are
-// served as substrings. Non-ASCII alphabets keep the per-call fallback.
+// Custom alphabet ID generator. Pure-ASCII alphabets (slugId/shortId included) get
+// a pooled generator: each Math.random() draw yields TWO digits via d = (r*len²)|0,
+// calls are substrings of a decoded pool string. Non-ASCII keeps the per-call fallback.
 export const customAlphabet = (alphabet, defaultSize = 21) => {
   if (!alphabet || alphabet.length === 0) {
     throw new Error('Alphabet cannot be empty')
@@ -123,10 +120,8 @@ export const customAlphabet = (alphabet, defaultSize = 21) => {
   }
 }
 
-// Main nopeid function (non-secure), pooled: each Math.random() double
-// contributes 24 mantissa bits = FOUR 6-bit alphabet indexes, so a 16384-char
-// refill costs 4096 PRNG draws plus one TextDecoder pass; each call is then a
-// single substring of the pool string.
+// Main nopeid (non-secure), pooled: each Math.random() double contributes 24
+// mantissa bits = FOUR 6-bit indexes; each call is one substring of the pool.
 let nsPoolBuf // lazily allocated with the first id
 let nsPoolStr = ''
 let nsPoolOffset = POOL_CHARS

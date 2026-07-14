@@ -40,9 +40,7 @@ const POOL_DECODER = /* @__PURE__ */ new TextDecoder('latin1')
 // Pool size shared by nopeid() and the ASCII customAlphabet() tier.
 const POOL_CHARS = 16384
 
-// Pure-ASCII alphabets get a pooled generator: one Math.random() draw yields
-// TWO digits via d = (r * len²) | 0; calls are substrings of a decoded pool
-// string. Non-ASCII alphabets keep the per-call fallback (see non-secure/index.js).
+// ASCII alphabets: pooled generator, two digits per Math.random() draw (see non-secure/index.js).
 const customAlphabet = (alphabet, defaultSize = 21) => {
   if (!alphabet || alphabet.length === 0) {
     throw new Error('Alphabet cannot be empty')
