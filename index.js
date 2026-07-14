@@ -78,26 +78,17 @@ const fillPool = bytes => {
 // Used by secureToken's unpooled byte→char mapping.
 const URL_ALPHABET_CODES = /* @__PURE__ */ Uint8Array.from(urlAlphabet, c => c.charCodeAt(0))
 
-// Dedicated pool for nopeid(): raw CSPRNG bytes encoded to a URL-safe string in
-// one native toString('base64url') per refill — no JS translate loop at all.
-// base64url's char set is exactly urlAlphabet's set (A-Za-z0-9_-), each char
-// carries 6 uniform bits from the CSPRNG stream, and all 8 bits of every byte
-// are consumed (the old byte&63 mapping discarded 2 bits per byte). Only the
-// internal 6-bit→char mapping ORDER differs from urlAlphabet — statistically
-// irrelevant for uniform random input; the exported urlAlphabet constant and
-// every charset/distribution contract are unchanged.
-// Kept separate from `pool` (raw bytes for random()/customAlphabet()/uuid()/etc.).
-// 49152 raw bytes (divisible by 3, so no padding group ever exists) encode to
-// exactly MAX_POOL_SIZE (65536) pool chars.
+// Dedicated nopeid() pool (separate from the raw-bytes `pool`): one native
+// toString('base64url') per refill; base64url's char SET equals urlAlphabet's
+// set, each char carries 6 uniform CSPRNG bits, so every charset/distribution
+// contract is unchanged. 49152 raw bytes (divisible by 3) → 65536 pool chars.
 const ID_POOL_RAW_BYTES = 49152
 let idPool, idPoolOffset, idPoolStr
 
 const fillIdPool = () => {
   if (!idPool) idPool = Buffer.allocUnsafe(ID_POOL_RAW_BYTES)
   fillBuffer(idPool)
-  // Pay the encode + string allocation once per refill, not once per call.
-  // The hot path then returns idPoolStr.substring(a,b): a SlicedString (O(1),
-  // zero-copy) for sizes ≥ 13, and a ~10 ns inline copy below that.
+  // One encode + string allocation per refill; calls serve idPoolStr.substring().
   idPoolStr = idPool.toString('base64url')
   idPoolOffset = 0
 }
@@ -105,10 +96,8 @@ const fillIdPool = () => {
 // Shared zero-length result for non-positive random() requests (avoids pool corruption)
 const EMPTY = Buffer.alloc(0)
 
-// Internal: returns a view INTO the shared pool. Zero-alloc, but the bytes can
-// be silently overwritten by the next fillPool() call. Only safe for callers
-// that translate-and-discard within a single synchronous step (sortableId,
-// ulid, uuidv7, monotonicFactory, objectId).
+// Internal: zero-alloc view INTO the shared pool; bytes may be overwritten by
+// the next fillPool(). Only for synchronous translate-and-discard callers.
 const randomView = bytes => {
   bytes |= 0
   if (bytes <= 0) return EMPTY
@@ -116,11 +105,8 @@ const randomView = bytes => {
   return pool.subarray(poolOffset - bytes, poolOffset)
 }
 
-// Public: returns a fresh COPY of random bytes. Holding the result across
-// further random()/nopeid()/customAlphabet() calls is safe — pool refills
-// cannot overwrite a copy. ~5-15 ns slower than the old view at small sizes,
-// but eliminates the foot-gun of users mutating a buffer that the next call
-// will overwrite.
+// Public: returns a fresh COPY. Safe to retain across subsequent
+// random()/nopeid()/customAlphabet() calls.
 export const random = bytes => {
   bytes |= 0
   if (bytes <= 0) return EMPTY
@@ -232,14 +218,10 @@ export const customRandom = (alphabet, defaultSize, getRandom) => {
 // so a bigger pool halves refill frequency at no per-char cost.
 const HEX_POOL_TARGET = 65536
 
-// Custom alphabet ID generator factory. The refill strategy is picked ONCE at
-// factory time by alphabet shape (all tiers share the same hot path: one
-// cPool.substring per call):
-//   tier 1  hex alphabets      → randomFillSync + native toString('hex')
-//   tier 2  power-of-2 length  → one bulk fill + tight translate loop (no rejection)
-//   tier 3  everything else    → one bulk fill + single-pass rejection sampling
-// Tiers 2/3 replace the old per-step fillPool loop (~1000+ small CSPRNG pool
-// hits per refill) with a single bulk fill. This also powers slugId/shortId.
+// Custom alphabet factory. Refill strategy picked once at factory time: hex →
+// native toString('hex'); power-of-2 length → bulk fill + translate loop; else
+// → bulk fill + rejection sampling. Hot path: one cPool.substring per call.
+// Also powers slugId/shortId.
 export const customAlphabet = (alphabet, defaultSize = 21) => {
   const codes = validateAlphabet(alphabet)
   const len = alphabet.length
@@ -390,21 +372,13 @@ const incrementRandom = () => {
   return false // Overflow - need new timestamp
 }
 
-// ULID-like sortable ID with monotonic guarantee (legacy).
-// Format: 10 chars timestamp (base32) + 12 chars random (base32) = 22 chars
-// Max wait iterations prevents DoS from frozen system clock
-//
-// @deprecated Prefer orderedId() — fixed 21-char Base58, stronger invariants,
-//             explicit counter overflow handling. sortableId() is kept for
-//             backward compatibility; sizes < 22 truncate the format and
-//             weaken uniqueness guarantees.
+// ULID-like sortable ID, 10-char base32 timestamp + 12-char random, monotonic
+// (legacy); the max-wait cap prevents DoS from a frozen clock.
+// @deprecated Prefer orderedId(); sizes < 22 truncate and weaken uniqueness.
 const MAX_CLOCK_WAIT_ITERATIONS = 10000
 
-// Cached string pieces (same pattern as orderedId): the 10-char timestamp
-// prefix is re-encoded only when the ms changes, the first 11 counter digits
-// only on a carry (1-in-32 of same-ms calls), and the hot same-ms increment
-// touches nothing but the final digit's char code. The common call is then a
-// 3-part concat instead of 22 buffer writes + a fixed-cost Buffer.toString.
+// Cached pieces (same pattern as orderedId): ts prefix re-encoded per ms,
+// counter head only on carry; hot same-ms call bumps one char code.
 let sortTsPrefix = ''   // 10 Crockford chars for lastTime
 let sortRndPrefix = ''  // 11 Crockford chars: lastRandom[0..10]
 let sortTailCode = 0    // char code of CROCKFORD_CODES[lastRandom[11]]
@@ -479,9 +453,7 @@ export const prefixedId = (prefix, size = 21, separator = '_') => {
   return `${prefix}${separator}${nopeid(size)}`
 }
 
-// Upper bound on a single generateMany() request. The output is a single
-// Array of strings; >1M entries crosses into "you probably want a stream"
-// territory and would silently exhaust V8's young-gen.
+// Cap a single request: >1M strings in one Array wants a stream instead.
 const GENERATE_MANY_MAX = 1_000_000
 
 // Generate multiple unique IDs at once. Batch path slices the shared id pool
@@ -538,11 +510,9 @@ const validTableFor = alphabet => {
 }
 
 // Validate if a string is a valid ID for given alphabet
-// No early-return on first bad character — avoids the obvious first-bad-char timing
-// leak. This is NOT a true constant-time check, but it prevents the most naive
-// position oracle. charCodeAt + table lookup avoids Set.has(id[i])'s per-char
-// single-character string allocation. Chars outside Latin-1 index past the table
-// (undefined), which the &= correctly folds to invalid.
+// Non-short-circuit scan (avoids the naive first-bad-char timing oracle; NOT
+// strictly constant-time). charCodeAt + table beats Set.has per-char allocation;
+// non-Latin-1 chars index past the table and the &= folds them to invalid.
 export const isValid = (id, alphabet = urlAlphabet) => {
   if (typeof id !== 'string' || id.length === 0) return false
 
@@ -600,20 +570,14 @@ export const nopeidAsync = async (size = 21) => {
   return nopeid(size)
 }
 
-// UUID v4 generator. Backed by a string pool of pre-formatted v4 UUIDs: at refill
-// time we draw 4096*16 fresh CSPRNG bytes, apply the v4 version + RFC 4122 variant
-// bit patches per slot, write 32 hex chars (hyphens are pre-baked once at the slot
-// positions 8/13/18/23), then toString once for the whole 144 KiB. Each call is then
-// a single substring(start, start+36) — a SlicedString on a flat one-byte parent.
-// Entropy is unchanged: every UUID still gets its own 16 CSPRNG bytes and its own
-// proper v4 patches.
+// UUID v4 pool: refill draws 4096×16 fresh CSPRNG bytes, patches v4/variant
+// bits per slot, pre-bakes hyphens, then one toString; each call is a single
+// 36-char substring. Every UUID still gets its own 16 CSPRNG bytes.
 const UUID_POOL_COUNT = 4096
 const UUID_POOL_BYTES = UUID_POOL_COUNT * 36
 
-// byte -> both hex char codes packed for one little-endian 16-bit store
-// (low byte = high nibble's char, so it lands first in memory). Built lazily
-// with the uuid pool. DataView is used for the stores because the odd hyphen
-// offsets make half the hex pairs unaligned.
+// byte → both hex char codes packed for one 16-bit LE store; DataView because
+// hyphen offsets leave half the pairs unaligned. Built lazily with the pool.
 let HEX16_LE = null
 let uuidPool, uuidPoolView, uuidPoolStr, uuidPoolOffset, uuidRawScratch
 export const uuid = () => {
@@ -736,10 +700,8 @@ const hexTail = n => {
   return hexPoolStr.substring(start, hexPoolOffset)
 }
 
-// Variant char keyed by a random hex CHAR's code. The hex char is uniform over
-// its 16 VALUES, and value & 3 is uniform over 4 — so indexing by the char's
-// code (not the code itself & 3, which would be biased by the 0-9/a-f code gap)
-// yields a uniform pick from '89ab'.
+// Variant pick keyed by the hex char's VALUE (a raw code&3 would bias via the
+// 0-9/a-f code gap): uniform over '89ab'.
 const VARIANT_FROM_HEX_CODE = /* @__PURE__ */ (() => {
   const table = new Array(256).fill('8')
   const hex = '0123456789abcdef'
@@ -747,10 +709,8 @@ const VARIANT_FROM_HEX_CODE = /* @__PURE__ */ (() => {
   return table
 })()
 
-// UUID v7: 48-bit Unix ms timestamp + version + variant + 74 random bits.
-// The 15-char timestamp+version prefix ("tttttttt-tttt-7") only changes when
-// the millisecond does, so it's cached; per call we splice pooled hex chars
-// around the two remaining hyphens and the variant char.
+// UUID v7: 48-bit ms timestamp + version + variant + 74 random bits. The
+// 15-char "tttttttt-tttt-7" prefix is cached per ms; pooled hex fills the rest.
 let v7LastMs = -1
 let v7Prefix = ''
 export const uuidv7 = () => {
@@ -1088,31 +1048,16 @@ export const defineId = (prefix, opts = {}) => {
 }
 
 // === Secure bearer tokens (unpooled, ephemeral) ===
-//
-// nopeid() returns substrings of a long-lived cached pool string (idPoolStr) for
-// throughput. That cache is fine for public IDs, but for bearer secrets (API keys,
-// session tokens, password-reset tokens) it means a memory dump may expose tokens
-// that have not yet been requested. secureToken() defeats that class of risk:
-// each call allocates its own buffer, fills it from CSPRNG, maps to the alphabet,
-// then zeros the raw bytes before returning. The returned V8 string itself cannot
-// be zeroed — that is a JavaScript limitation, documented in the JSDoc.
+// Unlike pooled nopeid(), each call is self-contained: fresh buffer, CSPRNG
+// fill, map, then zero the raw bytes — no future-token cache to leak.
 
 const SECURE_TOKEN_MIN = 32
 
 /**
- * Generate a bearer token for security-sensitive use cases in JavaScript
- * environments (URL-safe, 64-char alphabet, bias-free CSPRNG).
- *
- * secureToken() does not cache or pre-generate future tokens; each call allocates
- * its own local buffer, fills it from CSPRNG, maps to the alphabet, and zeros the
- * raw byte buffer before returning. This eliminates the "future-token cache" class
- * of disclosure risk that pooled generators (like nopeid()) inherently carry.
- *
- * NOTE: the returned JavaScript string itself cannot be zeroized — V8 strings are
- * immutable and live in the GC heap until collected. If your threat model requires
- * memory-clearable secrets, keep the bytes as Buffer/Uint8Array and never .toString().
- *
- * Store HASHED tokens in your database (e.g. SHA-256), never the raw token.
+ * Generate a bearer token (URL-safe 64-char alphabet, bias-free CSPRNG).
+ * Unpooled: no future-token cache; the raw byte buffer is zeroized before
+ * returning, but the returned V8 string itself cannot be zeroized (immutable,
+ * GC heap). Store HASHED tokens (e.g. SHA-256), never the raw value.
  *
  * @param size - Token length in characters (default 48, min 32)
  * @returns A URL-safe random token
@@ -1189,29 +1134,10 @@ export const defineToken = (prefix, opts = {}) => {
 }
 
 // === orderedId() — sortable 21-char Base58 ID, hot-path string cache ===
-//
-// Layout: 8 ts | 5 counter | 8 random  (lexicographic sort matches creation time).
-//
-// Hot path design (mirrors sparkid's technique with stronger invariants):
-//
-//   - Timestamp prefix is cached as a STRING and only re-encoded when the
-//     millisecond advances. Same-ms calls reuse it for free.
-//   - Counter is split into a 4-char "head" (folded into the cached prefix
-//     as `prefixPlusCounterHead`, 12 chars total) and a 1-char "tail" stored
-//     as a single char code. Advancing the counter within a ms is one
-//     SUCCESSOR_CC lookup; only tail overflow touches the head.
-//   - Random tail (8 chars) is rejection-sampled from a Uint8Array char-code
-//     pool and pre-built into a flat Latin-1 string at refill time, so the
-//     hot path consumes 8 fresh random chars as a single SlicedString
-//     substring — no per-call fromCharCode call for the random bytes.
-//   - Strict monotonic across clock rewinds (ms falls to the counter-advance
-//     branch and reuses the larger cached prefix) and counter overflow
-//     (synthetic ms bump, no busy-wait).
-//
-// We KEEP 5 counter + 8 random (vs sparkid's 6+7) for the extra ~6 bits of
-// same-ms random entropy — the format choice from the v1 plan. To match and
-// exceed sparkid's throughput we serve the 8 random chars as a substring of
-// a pre-built string instead of via fromCharCode(9 args).
+// Layout 8 ts | 5 counter | 8 random (5+8 gives ~6 more bits of same-ms
+// entropy than sparkid's 6+7). Cached ts+counter-head prefix string, O(1)
+// SUCCESSOR_CC counter-tail bump, pooled pre-built random tail; strictly
+// monotonic across clock rewinds and counter overflow.
 
 const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
 const BASE58_CHARS = /* @__PURE__ */ Array.from(BASE58_ALPHABET)
@@ -1263,11 +1189,9 @@ let timestampCachePrefix = ''        // 8-char Base58 ts (live)
 let prefixPlusCounterHead = ''       // 12-char string: ts + 4 counter head chars
 let counterTailCharCode = FIRST_CHAR_CODE
 
-// Random pool. The raw byte buffer is rejection-sampled to Base58 char codes,
-// then materialized as a Latin-1 string ONCE per refill. The hot path serves
-// 8 random chars via String.prototype.substring on this pool string — V8
-// returns a SlicedString in O(1) for that length, no allocation per call.
-// This is the same trick `nopeid()` uses with `idPoolStr`.
+// Random pool: rejection-sampled to Base58 char codes, materialized as one
+// Latin-1 string per refill; the hot path serves 8 chars via substring
+// (same trick as nopeid()'s idPoolStr).
 const ORDERED_RND_POOL_SIZE = 16384
 const RND_LOOKUP = /* @__PURE__ */ (() => {
   const t = new Uint8Array(256)
@@ -1378,20 +1302,13 @@ const incrementCounterHead = () => {
   seedCounter()
 }
 
-// nextOrderedIdWithMs(ms) is the core hot path, parameterized on the wall clock.
-// orderedId() passes a fresh Date.now() on every call, so the embedded timestamp
-// is accurate to the call. orderedId.many() passes one clock read per batch
-// (refreshed every 4096 IDs), amortizing Date.now() across the batch with no
-// background timer and no change to the per-call path. Both entry points share
-// the module-level cache state below, so a many() batch leaves the generator
-// strictly monotonic for any orderedId() that follows.
+// Core hot path, parameterized on the wall clock: orderedId() passes Date.now()
+// per call; orderedId.many() passes one read per 4096-ID chunk. Shared module
+// state keeps a following orderedId() strictly monotonic after a batch.
 const nextOrderedIdWithMs = ms => {
-  // Clock rewind is handled implicitly: when ms <= timestampCacheMs (whether
-  // because the clock went backwards or because we're still in the same ms),
-  // we fall to the else branch, advance the counter, and reuse the cached
-  // prefix. Result: the emitted ID's ts prefix is never smaller than one we've
-  // already returned, even across NTP corrections / VM resumes / container
-  // skews. No explicit clamp needed in the hot path.
+  // Clock rewind handled implicitly: ms <= timestampCacheMs falls to the else
+  // branch (counter advance) and reuses the cached larger prefix, so the ts
+  // prefix never goes backwards (NTP corrections, VM resumes, container skew).
   if (ms > timestampCacheMs) {
     const delta = ms - timestampCacheMs
     if (delta <= 58) {
@@ -1407,13 +1324,8 @@ const nextOrderedIdWithMs = ms => {
     if (nxt) counterTailCharCode = nxt
     else incrementCounterHead()
   }
-  // Build the 21-char ID = 12-char cached prefix + 1-char counter tail + 8
-  // random chars. The 8-char random substring is copied into a fresh one-byte
-  // SeqString — V8 only returns a zero-copy SlicedString for length >= 13, so
-  // an 8-char slice is a small CopyChars, not a view — and the three operands
-  // are then joined via ConsStrings. This 3-operand form was MEASURED fastest
-  // on Node 22 / V8 13.x: a single 9-arg String.fromCharCode and four other
-  // hot-path variants all tied or regressed in a multi-process A/B against it.
+  // 3-operand concat: cached 12-char prefix + 1-char tail + 8-char copied
+  // substring — measured fastest on Node 22 vs fromCharCode and four variants.
   if (orderedRndPosition + ORDERED_RND_LEN > orderedRndCount) refillRandom()
   const pos = orderedRndPosition
   orderedRndPosition = pos + ORDERED_RND_LEN
@@ -1423,23 +1335,16 @@ const nextOrderedIdWithMs = ms => {
 }
 
 /**
- * Generate a sortable, strictly-monotonic 21-char Base58 ID.
- * Layout: 8 ts + 5 counter + 8 random. Lexicographic sort matches creation order.
- *
- * Invariants:
- *  - Strict monotonic (b > a) within and across milliseconds.
- *  - Clock rewind (Date.now() goes backwards) is clamped — never emits a
- *    timestamp prefix smaller than one already returned.
- *  - Same-ms counter overflow is handled by a synthetic +1 ms bump. No
- *    busy-wait loop, no recursion, no event-loop block.
+ * Generate a sortable, strictly-monotonic 21-char Base58 ID (8 ts + 5 counter
+ * + 8 random; lexicographic sort matches creation order). Clock rewinds are
+ * clamped — never emits a smaller ts prefix — and same-ms counter overflow
+ * does a synthetic +1 ms bump: no busy-wait, no recursion.
  */
 export const orderedId = () => nextOrderedIdWithMs(Date.now())
 
 /**
- * 21-byte ASCII representation of a fresh orderedId() — Base58 char codes in
- * latin1 (one byte per character). This is NOT a packed binary representation;
- * Base58 does not pack cleanly into bytes. A compact toBytes/fromBytes pair is
- * planned for v2.1.
+ * 21-byte ASCII form of a fresh orderedId() — Base58 char codes in latin1,
+ * NOT packed binary; a compact toBytes/fromBytes pair is planned for v2.1.
  */
 orderedId.asciiBytes = () => {
   const s = orderedId()
@@ -1477,23 +1382,14 @@ orderedId.parse = id => {
   }
 }
 
-// Upper bound on a single orderedId.many() request. Same rationale as
-// GENERATE_MANY_MAX: the result is one Array, and past ~1M entries you want a
-// stream, not a megabyte-scale array held live in young-gen.
+// Cap a single many() request (same rationale as GENERATE_MANY_MAX).
 const ORDERED_MANY_MAX = 1_000_000
 
 /**
  * Generate `count` strictly-monotonic, sortable orderedId()s as an Array.
- *
- * Reads the wall clock once at the start of the batch, then only every 4096
- * IDs, so the per-call Date.now() cost is amortized across the whole batch with
- * NO background timer and NO change to the default orderedId() path. IDs within
- * a batch are separated by the strictly-incrementing counter, so the result is
- * strictly monotonic and sorts in creation order. Because the clock is sampled
- * at most once per 4096 IDs, an embedded timestamp may lag real time by however
- * long it takes to emit up to 4096 IDs (sub-millisecond in practice); ordering
- * is always exact. Shares state with orderedId(), so a following orderedId()
- * continues monotonically from where the batch left off.
+ * Reads the clock once per 4096-ID chunk, so an embedded timestamp may lag
+ * real time (sub-ms in practice) while ordering stays exact; shares state
+ * with orderedId(), which continues monotonically after the batch.
  *
  * @param {number} count  Number of IDs. count <= 0 returns []; count > 1,000,000 throws.
  * @returns {string[]}
@@ -1507,15 +1403,9 @@ orderedId.many = count => {
   const out = new Array(count)
   let i = 0
   while (i < count) {
-    // One clock read per 4096-ID chunk. Within a chunk `ms` is constant, so
-    // only the first ID can advance the timestamp / reseed the counter; every
-    // later ID is provably a same-ms counter bump. We emit the first via the
-    // shared nextOrderedIdWithMs() and inline the same-ms path for the rest,
-    // dropping the per-ID function call and the `ms > timestampCacheMs` branch.
-    // The inlined block mirrors nextOrderedIdWithMs()'s else-branch + build —
-    // keep the two in sync. Measured ~+4% vs calling nextOrderedIdWithMs() per
-    // ID (multi-process A/B, Node 22); the per-call orderedId() path is left
-    // untouched, so it cannot regress.
+    // One clock read per chunk; within it every ID after the first is a
+    // same-ms counter bump, so the same-ms path is inlined. The inlined block
+    // mirrors nextOrderedIdWithMs()'s else-branch + build — keep the two in sync.
     const ms = Date.now()
     let end = i + 4096
     if (end > count) end = count
