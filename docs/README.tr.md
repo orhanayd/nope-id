@@ -10,7 +10,7 @@ JavaScript için minik, güvenli, URL-dostu benzersiz string ID üreteci.
 - **Daha Hızlı** - nanoid'den 1.4x ila 3x daha hızlı (CSPRNG, tam URL-safe alfabe); 5 temel benchmark'ın hepsini kazanıyor ([benchmark'lara bak](#performans))
 <!-- bench:headline:end -->
 - **Güvenlik Sertleştirilmiş** - Azaltılmış zamanlama sızıntı doğrulayıcıları, modulo bias eliminasyonu, prototype pollution koruması ([güvenlik](#güvenlik))
-- **İyi Test Edilmiş** - Güvenlik ve entropi testleri dahil 405 test ([test etme](#test-etme))
+- **İyi Test Edilmiş** - Güvenlik ve entropi testleri dahil 408 test ([test etme](#test-etme))
 - **Kriptografik Olarak Güvenli** - `webcrypto.getRandomValues()` (CSPRNG) kullanır
 - **Sıfır Bağımlılık** - Dış bağımlılık yok
 - **URL-safe** - `A-Za-z0-9_-` karakterlerini kullanır
@@ -998,7 +998,7 @@ nope-id güvenliği öncelikli olarak tasarlanmıştır. Temel kriptografik rand
 
 ## Test Etme
 
-nope-id, güvenlik-spesifik testler dahil **405 test** ile 11 test suite'inde kapsamlı test kapsamına sahiptir.
+nope-id, güvenlik-spesifik testler dahil **408 test** ile 11 test suite'inde kapsamlı test kapsamına sahiptir.
 
 ### Testleri Çalıştırma
 
@@ -1029,13 +1029,13 @@ npm run test:pack        # npm tarball manifest guard'ı (paketlenen dosya liste
 | **Utils** | 56 | isValid, collisionProbability, güvenlik testleri |
 | **Non-Secure** | 30 | Math.random() bazlı versiyon |
 | **ID Types** | 43 | uuidv7, ulid, monotonicFactory, snowflake, objectId |
-| **Encoding** | 32 | sqids, defineId, isValidUUID, isValidULID |
+| **Encoding** | 33 | sqids, defineId, isValidUUID, isValidULID |
 | **Secure Token** | 26 | secureToken, apiKey, defineToken |
 | **Ordered ID** | 16 | orderedId, orderedId.many, parse, asciiBytes |
 | **Parity** | 17 | ESM/CJS/browser yüzeyi + bayt-özdeş hata mesajları |
-| **Alphabet Tiers** | 19 | customAlphabet refill tier'ları, customRandom chunk'lama |
+| **Alphabet Tiers** | 21 | customAlphabet refill tier'ları, customRandom chunk'lama |
 | **Pack Manifest** | 2 | npm tarball dosya listesi (başıboş dosya paketlenemez) |
-| **Toplam** | **405** | Hepsi geçiyor |
+| **Toplam** | **408** | Hepsi geçiyor |
 
 ### Güvenlik Testleri
 
@@ -1142,11 +1142,11 @@ Hız mühendislikten gelir, randomness'tan ödün vermekten değil:
 
 - **Cache'lenmiş pool string'i:** Refill'de 49152 ham CSPRNG byte'ı, tek bir native `Buffer.toString('base64url')` çağrısıyla **bir kez** 65536 karakterlik flat bir string'e encode edilir ve `idPoolStr` olarak cache'lenir (base64url'in karakter seti URL-safe alfabenin birebir aynısıdır ve her karakter 6 uniform bit taşır). Her `nopeid()` çağrısı tek bir `idPoolStr.substring(start, end)` döndürür: ≥ 13 boyutlar için V8 SlicedString (O(1), zero-copy), altında küçük inline copy; çağrı başına encode maliyeti ödenmez. Aynı trick `customAlphabet`, `uuid()` ve arkadaşlarına da güç veriyor.
 - **Native encode, JS çeviri döngüsü yok:** Refill'de byte başına sıfır JavaScript işi vardır ve her random byte'ın 8 bit'inin tamamı tüketilir (1.4 öncesi tasarım `byte & 63` çeviri döngüsünde byte başına 2 bit atıyordu); refill ~2.3x ucuzlar ve karakter başına %25 daha az CSPRNG byte'ı çekilir. Browser build'i, destekleyen motorlarda (güncel Chrome/Firefox/Safari) native `Uint8Array.toBase64` kullanır, eski motorlar için 16-bit çeviri tablosu fallback olarak durur.
-- **Havuzlanmış CSPRNG:** Bir `randomFillSync()` dolumu (browser'da `crypto.getRandomValues()`), varsayılan boyutta ID başına bir syscall yerine binlerce ID'yi kapsar. `uuid()` daha ileri gider: 4096 v4 UUID'i (her slot için version + RFC 4122 variant bit'leri zaten yamanmış halde) tek bir 144 KiB string'e pre-format eder, böylece her çağrı sadece bir `substring(start, start+36)`.
+- **Havuzlanmış CSPRNG:** Bir `randomFillSync()` dolumu (browser'da `crypto.getRandomValues()`), varsayılan boyutta ID başına bir syscall yerine binlerce ID'yi kapsar. `uuid()` daha ileri gider: 1820 v4 UUID'i (her slot için version + RFC 4122 variant bit'leri zaten yamanmış halde) tek bir 65520-karakter string'e pre-format eder — V8'in büyük-string allocation uçurumunun altında kalacak şekilde boyutlandırılmıştır — böylece her çağrı sadece bir `substring(start, start+36)`. `uuidv7()` random kısmı için aynısını yapar: hyphen'ları ve `[89ab]` variant'ı önceden gömülmüş 2048 adet 21-karakter pre-format kuyruk havuzu; her çağrı cache'lenmiş ms prefix'i + tek bir `substring`.
 - **Bias yok, tasarım gereği:** `nopeid()`'in base64url karakterleri CSPRNG akışının tam 6-bit gruplarıdır (bijeksiyon, reddedilecek bir şey yok); 2'nin kuvveti olmayan custom alfabeler ise tam rejection sampling'i korur, yani hiçbir path'te modulo bias yoktur.
-- **Alfabe şekline göre tier'lı `customAlphabet`:** Factory, refill stratejisini alfabe başına bir kez seçer: hex alfabeler için tamamen native hex encode, 2'nin kuvveti uzunluklar için branch-free bulk çeviri, geri kalan her şey için tek geçişli bulk rejection sampling. Hot path her zaman tek bir `substring(start, end)`; bu aynı zamanda `slugId()` ve `shortId()`'i hızlandırır.
-- **Zaman-prefix cache'i:** `sortableId()`, `ulid()`, `uuidv7()` ve `objectId()` timestamp prefix'lerini yalnızca saat değeri gerçekten değiştiğinde yeniden encode eder; random kuyruklarını önceden encode edilmiş pool string'lerinden alır (bias'sız `& 31` Crockford / native hex). Per-call path kısa bir string concat'ten ibarettir.
-- **Diğer her şey için precomputed tablolar:** `uuid()` için paketlenmiş 16-bit byte-to-hex store'ları, `ulid()`/`monotonicFactory()` için Crockford char kodları, artı per-call path'inin asla allocate etmemesi için yeniden kullanılan modül-seviye scratch buffer'ları.
+- **Alfabe şekline göre tier'lı `customAlphabet`:** Factory, refill stratejisini alfabe başına bir kez seçer: hex alfabeler için tamamen native hex encode, 2'nin kuvveti uzunluklar için branch-free bulk çeviri, geri kalan her şey için 16-bit çift-digit rejection sampling — len²'nin 65536'ya sığan en büyük katının altındaki her kabul edilen uint16 **iki** uniform karakter üretir; CSPRNG byte'ı başına karakter kabaca ikiye katlanır ve kabul döngüsü yarıya iner (byte bazlı örneklemenin hâlâ daha verimli olduğu 182-255 uzunluklar onda kalır). Hot path her zaman tek bir `substring(start, end)`; bu aynı zamanda `slugId()` ve `shortId()`'i hızlandırır.
+- **Zaman-prefix cache'i:** `sortableId()`, `ulid()`, `uuidv7()` ve `objectId()` timestamp prefix'lerini yalnızca saat değeri gerçekten değiştiğinde yeniden encode eder; random kuyruklarını önceden encode edilmiş pool string'lerinden alır — `ulid()` her 32-bit CSPRNG word'ünü altı bias'sız 5-bit Crockford digit'ine yeniden paketler. Per-call path kısa bir string concat'ten ibarettir. `objectId()` ve `monotonicFactory()` ayrıca son sıcak karakter dışındaki her şeyi cache'ler; yaygın durum iki parçalı bir concat'tir.
+- **Diğer her şey için precomputed tablolar:** `uuid()`/`uuidv7()` için paketlenmiş 16-bit byte-to-hex store'ları, `ulid()`/`monotonicFactory()` için Crockford char kodları, artı per-call path'inin asla allocate etmemesi için yeniden kullanılan modül-seviye scratch buffer'ları.
 
 nope-id'nin yenmeye çalış**madığı** şeyler:
 
@@ -1169,7 +1169,7 @@ Bir benchmark yalnızca birden fazla araca karşı anlamlıdır (nanoid yazarın
 | `uuid` package `v7()` | ~499K | |
 <!-- bench:uuid-table:end -->
 
-**Dürüst yaklaşım:** nope-id'in `uuid()`'i her CSPRNG yenilemesinde 4096 v4 UUID'i önceden formatlıyor, böylece her çağrı sadece bir `substring()`. Sonuç: native `crypto.randomUUID()` ile en az aynı seviyede, güncel CI'da ise önde. İkisi gerçek donanımda yer değiştirebiliyor (CSPRNG entropy yolu paylaşılıyor, runner gürültüsü de cabası), dolayısıyla pratikte hız olarak eşit kabul edin. Eğer tek ihtiyacınız düz bir v4 UUID ise ve bağımlılık istemiyorsanız stdlib işinizi görür. Ama nope-id'i zaten başka bir şey için kullanıyorsanız (UUIDv7, ULID, Snowflake, ObjectId, Sqids, typed ID'ler, nanoid tarzı kısa ID'ler ya da sadece nanoid'den hızlı URL-safe ID'ler), native'e başvurmaya gerek yok; `uuid()` en az onun kadar hızlı, dual-module ve zero-dependency.
+**Dürüst yaklaşım:** nope-id'in `uuid()`'i her CSPRNG yenilemesinde 1820 v4 UUID'i önceden formatlıyor, böylece her çağrı sadece bir `substring()`. Sonuç: native `crypto.randomUUID()` ile en az aynı seviyede, güncel CI'da ise önde. İkisi gerçek donanımda yer değiştirebiliyor (CSPRNG entropy yolu paylaşılıyor, runner gürültüsü de cabası), dolayısıyla pratikte hız olarak eşit kabul edin. Eğer tek ihtiyacınız düz bir v4 UUID ise ve bağımlılık istemiyorsanız stdlib işinizi görür. Ama nope-id'i zaten başka bir şey için kullanıyorsanız (UUIDv7, ULID, Snowflake, ObjectId, Sqids, typed ID'ler, nanoid tarzı kısa ID'ler ya da sadece nanoid'den hızlı URL-safe ID'ler), native'e başvurmaya gerek yok; `uuid()` en az onun kadar hızlı, dual-module ve zero-dependency.
 
 ### `ulid` paketine karşı ULID (sortable)
 

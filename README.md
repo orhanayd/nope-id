@@ -10,7 +10,7 @@ A tiny, secure, URL-friendly unique string ID generator for JavaScript.
 - **Faster** - 1.4x to 3x faster than nanoid (CSPRNG, full URL-safe alphabet); wins all 5 core benchmarks ([see benchmarks](#performance))
 <!-- bench:headline:end -->
 - **Security Hardened** - Reduced timing-leak validators, modulo bias elimination, prototype pollution protection ([see security](docs/README.md#security))
-- **Well Tested** - 405 tests including security & entropy tests ([see testing](docs/README.md#testing))
+- **Well Tested** - 408 tests including security & entropy tests ([see testing](docs/README.md#testing))
 - **Cryptographically Secure** - Uses `webcrypto.getRandomValues()` (CSPRNG)
 - **Zero Dependencies** - No external dependencies
 - **URL-safe** - Uses `A-Za-z0-9_-` characters

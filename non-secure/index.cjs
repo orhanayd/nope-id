@@ -256,15 +256,14 @@ const isValid = (id, alphabet = urlAlphabet) => {
   return true
 }
 
-const slugGenerator = customAlphabet(alphabets.lowercase + alphabets.numbers, 12)
-const shortGenerator = customAlphabet(alphabets.nolookalikes, 8)
+// Pre-cached generators, exported directly (the closure carries the default
+// size; a delegating wrapper would only add a call frame)
 
-// Slug-friendly ID (lowercase + numbers only). The cached generator's returned closure
-// honors any size argument, so we never need to build a fresh factory per call.
-const slugId = (size = 12) => slugGenerator(size)
+// Slug-friendly ID (lowercase + numbers only), default size 12.
+const slugId = customAlphabet(alphabets.lowercase + alphabets.numbers, 12)
 
-// Short ID without similar-looking characters. Same delegation pattern as slugId.
-const shortId = (size = 8) => shortGenerator(size)
+// Short ID without similar-looking characters, default size 8.
+const shortId = customAlphabet(alphabets.nolookalikes, 8)
 
 const decodeTime = sortableIdStr => {
   if (!sortableIdStr || sortableIdStr.length < 10) {

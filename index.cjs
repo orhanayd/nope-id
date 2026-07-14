@@ -635,24 +635,16 @@ const uuid = () => {
     for (let k = 0; k < UUID_POOL_COUNT; k++) {
       const ri = k << 4
       const oo = k * 36
-      // Patch version (4) into byte 6 and RFC 4122 variant into byte 8, then
-      // write each byte's two hex chars with a single 16-bit store.
-      dv.setUint16(oo,      hx[raw[ri]], true)
-      dv.setUint16(oo + 2,  hx[raw[ri + 1]], true)
-      dv.setUint16(oo + 4,  hx[raw[ri + 2]], true)
-      dv.setUint16(oo + 6,  hx[raw[ri + 3]], true)
-      dv.setUint16(oo + 9,  hx[raw[ri + 4]], true)
-      dv.setUint16(oo + 11, hx[raw[ri + 5]], true)
-      dv.setUint16(oo + 14, hx[(raw[ri + 6] & 0x0f) | 0x40], true)
-      dv.setUint16(oo + 16, hx[raw[ri + 7]], true)
-      dv.setUint16(oo + 19, hx[(raw[ri + 8] & 0x3f) | 0x80], true)
-      dv.setUint16(oo + 21, hx[raw[ri + 9]], true)
-      dv.setUint16(oo + 24, hx[raw[ri + 10]], true)
-      dv.setUint16(oo + 26, hx[raw[ri + 11]], true)
-      dv.setUint16(oo + 28, hx[raw[ri + 12]], true)
-      dv.setUint16(oo + 30, hx[raw[ri + 13]], true)
-      dv.setUint16(oo + 32, hx[raw[ri + 14]], true)
-      dv.setUint16(oo + 34, hx[raw[ri + 15]], true)
+      // Version/variant patched, then each adjacent byte pair's four hex chars
+      // written with one 32-bit store (8 runs between the hyphens; see index.js).
+      dv.setUint32(oo,      hx[raw[ri]]      | (hx[raw[ri + 1]]  << 16), true)
+      dv.setUint32(oo + 4,  hx[raw[ri + 2]]  | (hx[raw[ri + 3]]  << 16), true)
+      dv.setUint32(oo + 9,  hx[raw[ri + 4]]  | (hx[raw[ri + 5]]  << 16), true)
+      dv.setUint32(oo + 14, hx[(raw[ri + 6] & 0x0f) | 0x40] | (hx[raw[ri + 7]] << 16), true)
+      dv.setUint32(oo + 19, hx[(raw[ri + 8] & 0x3f) | 0x80] | (hx[raw[ri + 9]] << 16), true)
+      dv.setUint32(oo + 24, hx[raw[ri + 10]] | (hx[raw[ri + 11]] << 16), true)
+      dv.setUint32(oo + 28, hx[raw[ri + 12]] | (hx[raw[ri + 13]] << 16), true)
+      dv.setUint32(oo + 32, hx[raw[ri + 14]] | (hx[raw[ri + 15]] << 16), true)
     }
     uuidPoolStr = uuidPool.toString('latin1')
     uuidPoolOffset = 0
@@ -662,16 +654,14 @@ const uuid = () => {
   return uuidPoolStr.substring(start, uuidPoolOffset)
 }
 
-// Pre-cached generators
-const slugGenerator = customAlphabet(alphabets.lowercase + alphabets.numbers, 12)
-const shortGenerator = customAlphabet(alphabets.nolookalikes, 8)
+// Pre-cached generators, exported directly (the closure carries the default
+// size; a delegating wrapper would only add a call frame — see index.js)
 
-// Slug-friendly ID (lowercase + numbers only). The cached generator's returned closure
-// honors any size argument, so we never need to build a fresh factory per call.
-const slugId = (size = 12) => slugGenerator(size)
+// Slug-friendly ID (lowercase + numbers only), default size 12.
+const slugId = customAlphabet(alphabets.lowercase + alphabets.numbers, 12)
 
-// Short ID without similar-looking characters. Same delegation pattern as slugId.
-const shortId = (size = 8) => shortGenerator(size)
+// Short ID without similar-looking characters, default size 8.
+const shortId = customAlphabet(alphabets.nolookalikes, 8)
 
 const decodeTime = sortableIdStr => {
   if (!sortableIdStr || sortableIdStr.length < 10) {
@@ -746,12 +736,11 @@ const fillV7Pool = () => {
     const ri = k * 10
     const o = k * V7_TAIL_LEN
     // rand_a: b0 + b1's high nibble; variant: b1's low 2 bits; rand_b: b2 +
-    // b3's high nibble + b4..b9. b3's low nibble is discarded (see index.js).
-    dv.setUint16(o, hx[raw[ri]], true)
-    pool[o + 2] = HEX_HI[raw[ri + 1]]
-    pool[o + 4] = V7_VARIANT_CODES[raw[ri + 1] & 3]
-    dv.setUint16(o + 5, hx[raw[ri + 2]], true)
-    pool[o + 7] = HEX_HI[raw[ri + 3]]
+    // b3's high nibble + b4..b9. b3's low nibble is discarded. Two folded
+    // 32-bit stores cover chars 0-2 + '-' and variant + chars 5-7 (see index.js).
+    dv.setUint32(o, hx[raw[ri]] | (HEX_HI[raw[ri + 1]] << 16) | (0x2d << 24), true)
+    dv.setUint32(o + 4,
+      V7_VARIANT_CODES[raw[ri + 1] & 3] | (hx[raw[ri + 2]] << 8) | (HEX_HI[raw[ri + 3]] << 24), true)
     dv.setUint16(o + 9, hx[raw[ri + 4]], true)
     dv.setUint16(o + 11, hx[raw[ri + 5]], true)
     dv.setUint16(o + 13, hx[raw[ri + 6]], true)

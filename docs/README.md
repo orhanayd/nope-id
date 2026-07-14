@@ -10,7 +10,7 @@ A tiny, secure, URL-friendly unique string ID generator for JavaScript.
 - **Faster** - 1.4x to 3x faster than nanoid (CSPRNG, full URL-safe alphabet); wins all 5 core benchmarks ([see benchmarks](#performance))
 <!-- bench:headline:end -->
 - **Security Hardened** - Reduced timing-leak validators, modulo bias elimination, prototype pollution protection ([see security](#security))
-- **Well Tested** - 405 tests including security & entropy tests ([see testing](#testing))
+- **Well Tested** - 408 tests including security & entropy tests ([see testing](#testing))
 - **Cryptographically Secure** - Uses `webcrypto.getRandomValues()` (CSPRNG)
 - **Zero Dependencies** - No external dependencies
 - **URL-safe** - Uses `A-Za-z0-9_-` characters
@@ -1013,7 +1013,7 @@ nope-id is designed with security as a top priority. We've implemented multiple 
 
 ## Testing
 
-nope-id has comprehensive test coverage with **405 tests** across 11 test suites, including security-specific tests.
+nope-id has comprehensive test coverage with **408 tests** across 11 test suites, including security-specific tests.
 
 ### Run Tests
 
@@ -1044,13 +1044,13 @@ npm run test:pack        # npm tarball manifest guard (exact shipped file list)
 | **Utils** | 56 | isValid, collisionProbability, security tests |
 | **Non-Secure** | 30 | Math.random() based version |
 | **ID Types** | 43 | uuidv7, ulid, monotonicFactory, snowflake, objectId |
-| **Encoding** | 32 | sqids, defineId, isValidUUID, isValidULID |
+| **Encoding** | 33 | sqids, defineId, isValidUUID, isValidULID |
 | **Secure Token** | 26 | secureToken, apiKey, defineToken |
 | **Ordered ID** | 16 | orderedId, orderedId.many, parse, asciiBytes |
 | **Parity** | 17 | ESM/CJS/browser surface + byte-identical error messages |
-| **Alphabet Tiers** | 19 | customAlphabet refill tiers, customRandom chunking |
+| **Alphabet Tiers** | 21 | customAlphabet refill tiers, customRandom chunking |
 | **Pack Manifest** | 2 | exact npm tarball file list (no stray files can ship) |
-| **Total** | **405** | All tests passing |
+| **Total** | **408** | All tests passing |
 
 ### Security Tests
 
@@ -1158,11 +1158,11 @@ The speed comes from the engineering, not from cutting corners on randomness:
 
 - **Cached pool string:** on refill, 49152 raw CSPRNG bytes are encoded **once** with a single native `Buffer.toString('base64url')` into a flat 65536-char string cached as `idPoolStr` (base64url's character set is exactly the URL-safe alphabet, and every char carries 6 uniform bits). Each `nopeid()` call then returns a single `idPoolStr.substring(start, end)`, a V8 SlicedString (O(1), zero-copy) for sizes ≥ 13 and a tiny inline copy below that, instead of paying a per-call encode cost. Same trick powers `customAlphabet`, `uuid()`, and friends.
 - **Native encode, no JS translate loop:** the refill has zero per-byte JavaScript work and consumes all 8 bits of every random byte (the pre-1.4 design discarded 2 bits per byte in a `byte & 63` translate loop), so a refill costs ~2.3x less and draws 25% fewer CSPRNG bytes per char. The browser build uses native `Uint8Array.toBase64` where available (current Chrome/Firefox/Safari) and keeps the 16-bit translate table as a fallback for older engines.
-- **Pooled CSPRNG:** one `randomFillSync()` fill (`crypto.getRandomValues()` in the browser) covers thousands of IDs at the default size instead of one syscall per ID. `uuid()` goes further: it pre-formats 4096 v4 UUIDs (with version + RFC 4122 variant bits already patched per slot) into one 144 KiB string, so each call is just a `substring(start, start+36)`.
+- **Pooled CSPRNG:** one `randomFillSync()` fill (`crypto.getRandomValues()` in the browser) covers thousands of IDs at the default size instead of one syscall per ID. `uuid()` goes further: it pre-formats 1820 v4 UUIDs (with version + RFC 4122 variant bits already patched per slot) into one 65520-char string — sized to stay under V8's large-string allocation cliff — so each call is just a `substring(start, start+36)`. `uuidv7()` does the same for its random part: a pool of 2048 pre-formatted 21-char tails with the hyphens and `[89ab]` variant already baked in, making each call the cached ms prefix plus one `substring`.
 - **No bias, by construction:** `nopeid()`'s base64url chars are exact 6-bit groups of the CSPRNG stream (a bijection, nothing to reject), and non-power-of-2 custom alphabets keep full rejection sampling, so no path has modulo bias.
-- **Shape-tiered `customAlphabet`:** the factory picks its refill strategy once per alphabet: fully native hex encode for hex alphabets, a branch-free bulk translate for power-of-2 lengths, and single-pass bulk rejection sampling for everything else. The hot path is always one `substring(start, end)`; this also speeds up `slugId()` and `shortId()`.
-- **Time-prefix caching:** `sortableId()`, `ulid()`, `uuidv7()`, and `objectId()` re-encode their timestamp prefix only when the clock value actually changes, and take their random tails from pre-encoded pooled strings (bias-free `& 31` Crockford / native hex), so the per-call path is a short string concat.
-- **Precomputed tables for everything else:** packed byte-to-hex 16-bit stores for `uuid()`, Crockford char codes for `ulid()`/`monotonicFactory()`, plus reusable module-scope scratch buffers so the per-call path never allocates.
+- **Shape-tiered `customAlphabet`:** the factory picks its refill strategy once per alphabet: fully native hex encode for hex alphabets, a branch-free bulk translate for power-of-2 lengths, and 16-bit double-digit rejection sampling for everything else — each accepted uint16 below the largest multiple of len² yields **two** uniform characters, roughly doubling the chars per CSPRNG byte and halving the accept-loop iterations (the few alphabet lengths where byte-wise sampling still yields more, 182-255, keep it). The hot path is always one `substring(start, end)`; this also speeds up `slugId()` and `shortId()`.
+- **Time-prefix caching:** `sortableId()`, `ulid()`, `uuidv7()`, and `objectId()` re-encode their timestamp prefix only when the clock value actually changes, and take their random tails from pre-encoded pooled strings — `ulid()` repacks each 32-bit CSPRNG word into six bias-free 5-bit Crockford digits — so the per-call path is a short string concat. `objectId()` and `monotonicFactory()` additionally cache everything but the last hot character, so their common case is a two-piece concat.
+- **Precomputed tables for everything else:** packed byte-to-hex 16-bit stores for `uuid()`/`uuidv7()`, Crockford char codes for `ulid()`/`monotonicFactory()`, plus reusable module-scope scratch buffers so the per-call path never allocates.
 
 What nope-id does **not** try to beat:
 
@@ -1185,7 +1185,7 @@ A benchmark is only meaningful against more than one tool (thanks to nanoid's au
 | `uuid` package `v7()` | ~499K | |
 <!-- bench:uuid-table:end -->
 
-**Honest take:** nope-id's `uuid()` pre-formats 4096 v4 UUIDs per CSPRNG refill, so each call is just a `substring()`. Result: at least on par with native `crypto.randomUUID()`, and ahead of it in current CI. The two trade places on real hardware (shared CSPRNG entropy path plus runner noise), so treat them as effectively tied for speed. If a plain v4 UUID is *all* you need and you do not want a dependency, the stdlib does the job. But if you are already using nope-id for anything else (UUIDv7, ULID, Snowflake, ObjectId, Sqids, typed IDs, nanoid-style short IDs, or just faster URL-safe IDs than nanoid), there is no reason to reach for native; `uuid()` is at least as fast, dual-module, and zero-dependency.
+**Honest take:** nope-id's `uuid()` pre-formats 1820 v4 UUIDs per CSPRNG refill, so each call is just a `substring()`. Result: at least on par with native `crypto.randomUUID()`, and ahead of it in current CI. The two trade places on real hardware (shared CSPRNG entropy path plus runner noise), so treat them as effectively tied for speed. If a plain v4 UUID is *all* you need and you do not want a dependency, the stdlib does the job. But if you are already using nope-id for anything else (UUIDv7, ULID, Snowflake, ObjectId, Sqids, typed IDs, nanoid-style short IDs, or just faster URL-safe IDs than nanoid), there is no reason to reach for native; `uuid()` is at least as fast, dual-module, and zero-dependency.
 
 ### ULID (sortable) vs the `ulid` package
 
