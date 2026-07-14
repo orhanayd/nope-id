@@ -137,11 +137,11 @@ _Last refreshed: 2026-07-14, Node v26.x, ubuntu-latest (GitHub Actions)._
 <!-- bench:comparison-table:start -->
 | Test | nanoid 6.0.0 | nope-id | Winner |
 |------|--------|---------|--------|
-| Basic (21 chars) | ~26.8M ops/sec | **~58.8M ops/sec** | **nope-id ~2.2x** |
-| Small (10 chars) | ~35.4M ops/sec | **~53.2M ops/sec** | **nope-id ~1.5x** |
-| Large (64 chars) | ~10.7M ops/sec | **~34.4M ops/sec** | **nope-id ~3.2x** |
-| Custom Alphabet | ~32M ops/sec | **~66.2M ops/sec** | **nope-id ~2.1x** |
-| Batch (100 IDs) | ~246K ops/sec | **~695K ops/sec** | **nope-id ~2.8x** |
+| Basic (21 chars) | ~36.1M ops/sec | **~78.2M ops/sec** | **nope-id ~2.2x** |
+| Small (10 chars) | ~48.7M ops/sec | **~73.8M ops/sec** | **nope-id ~1.5x** |
+| Large (64 chars) | ~13.8M ops/sec | **~46.6M ops/sec** | **nope-id ~3.4x** |
+| Custom Alphabet | ~41M ops/sec | **~91.8M ops/sec** | **nope-id ~2.2x** |
+| Batch (100 IDs) | ~343K ops/sec | **~1.0M ops/sec** | **nope-id ~3x** |
 <!-- bench:comparison-table:end -->
 
 - [Full benchmark tables and methodology](docs/README.md#performance)
