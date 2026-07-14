@@ -93,8 +93,7 @@
 		"index.cjs",
 		"index.browser.js",
 		"index.d.ts",
-		"non-secure",
-		"CHANGELOG.txt"
+		"non-secure"
 	],
 	"devDependencies": {
 		"@lukeed/uuid": "^2.0.1",
