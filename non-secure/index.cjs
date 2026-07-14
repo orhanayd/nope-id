@@ -30,9 +30,19 @@ const alphabets = {
 const CROCKFORD_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
 
 // Pre-computed char codes of the URL-safe alphabet, indexed by (rand & 63).
-// Powers the single-allocation String.fromCharCode path in nopeid() below.
+// Powers the pooled refill in nopeid() below.
 const URL_ALPHABET_CODES = /* @__PURE__ */ Uint8Array.from(urlAlphabet, c => c.charCodeAt(0))
 
+// Cached latin1 decoder: one string per pool refill; ASCII-only pools keep
+// 'latin1' exact (see non-secure/index.js).
+const POOL_DECODER = /* @__PURE__ */ new TextDecoder('latin1')
+
+// Pool size shared by nopeid() and the ASCII customAlphabet() tier.
+const POOL_CHARS = 16384
+
+// Pure-ASCII alphabets get a pooled generator: one Math.random() draw yields
+// TWO digits via d = (r * len²) | 0; calls are substrings of a decoded pool
+// string. Non-ASCII alphabets keep the per-call fallback (see non-secure/index.js).
 const customAlphabet = (alphabet, defaultSize = 21) => {
   if (!alphabet || alphabet.length === 0) {
     throw new Error('Alphabet cannot be empty')
@@ -48,7 +58,56 @@ const customAlphabet = (alphabet, defaultSize = 21) => {
     seen.add(alphabet[i])
   }
 
+  let ascii = true
+  for (let i = 0; i < alphabet.length; i++) {
+    if (alphabet.charCodeAt(i) > 127) { ascii = false; break }
+  }
+
+  if (ascii) {
+    const len = alphabet.length
+    const len2 = len * len
+    const codes = new Uint8Array(len)
+    for (let i = 0; i < len; i++) codes[i] = alphabet.charCodeAt(i)
+    let poolBuf // lazily allocated with the first generated id
+    let poolStr = ''
+    let poolOffset = POOL_CHARS
+    const refill = () => {
+      if (!poolBuf) poolBuf = new Uint8Array(POOL_CHARS)
+      const buf = poolBuf
+      for (let i = 0; i < POOL_CHARS; i += 2) {
+        const d = (Math.random() * len2) | 0
+        buf[i] = codes[d % len]
+        buf[i + 1] = codes[(d / len) | 0]
+      }
+      poolStr = POOL_DECODER.decode(buf)
+      poolOffset = 0
+    }
+    return (size = defaultSize) => {
+      size |= 0
+      if (size <= 0) return ''
+      // Cold path: bigger than the pool — build locally with the same draws.
+      if (size > POOL_CHARS) {
+        const out = new Uint8Array(size)
+        let i = 0
+        const even = size - 1
+        for (; i < even; i += 2) {
+          const d = (Math.random() * len2) | 0
+          out[i] = codes[d % len]
+          out[i + 1] = codes[(d / len) | 0]
+        }
+        if (i < size) out[i] = codes[(Math.random() * len) | 0]
+        return POOL_DECODER.decode(out)
+      }
+      if (poolOffset + size > POOL_CHARS) refill()
+      const start = poolOffset
+      poolOffset += size
+      return poolStr.substring(start, poolOffset)
+    }
+  }
+
+  // Non-ASCII fallback: per-call concat (rare; kept simple and allocation-exact)
   return (size = defaultSize) => {
+    size |= 0
     if (size <= 0) return ''
     let id = ''
     let i = size
@@ -59,17 +118,52 @@ const customAlphabet = (alphabet, defaultSize = 21) => {
   }
 }
 
-// Builds char codes in a Uint8Array first, then converts to a string via
-// String.fromCharCode.apply, so V8 allocates the result once instead of producing
-// ~21 ConsString allocations from per-character concatenation.
+// Pooled nopeid: each Math.random() double contributes 24 mantissa bits = FOUR
+// 6-bit alphabet indexes; each call is one substring (see non-secure/index.js).
+let nsPoolBuf // lazily allocated with the first id
+let nsPoolStr = ''
+let nsPoolOffset = POOL_CHARS
+
+const refillNsPool = () => {
+  if (!nsPoolBuf) nsPoolBuf = new Uint8Array(POOL_CHARS)
+  const buf = nsPoolBuf
+  const codes = URL_ALPHABET_CODES
+  for (let i = 0; i < POOL_CHARS; i += 4) {
+    const r = (Math.random() * 16777216) | 0 // 24 uniform bits
+    buf[i] = codes[r & 63]
+    buf[i + 1] = codes[(r >>> 6) & 63]
+    buf[i + 2] = codes[(r >>> 12) & 63]
+    buf[i + 3] = codes[(r >>> 18) & 63]
+  }
+  nsPoolStr = POOL_DECODER.decode(buf)
+  nsPoolOffset = 0
+}
+
 const nopeid = (size = 21) => {
   size |= 0
   if (size <= 0) return ''
-  const codes = new Uint8Array(size)
-  for (let i = 0; i < size; i++) {
-    codes[i] = URL_ALPHABET_CODES[(Math.random() * 64) | 0]
+  // Cold path: bigger than the pool — build locally with the same 24-bit trick.
+  if (size > POOL_CHARS) {
+    const out = new Uint8Array(size)
+    const codes = URL_ALPHABET_CODES
+    let i = 0
+    const quads = size - 3
+    for (; i < quads; i += 4) {
+      const r = (Math.random() * 16777216) | 0
+      out[i] = codes[r & 63]
+      out[i + 1] = codes[(r >>> 6) & 63]
+      out[i + 2] = codes[(r >>> 12) & 63]
+      out[i + 3] = codes[(r >>> 18) & 63]
+    }
+    for (let r = (Math.random() * 16777216) | 0; i < size; i++, r >>>= 6) {
+      out[i] = codes[r & 63]
+    }
+    return POOL_DECODER.decode(out)
   }
-  return String.fromCharCode.apply(null, codes)
+  if (nsPoolOffset + size > POOL_CHARS) refillNsPool()
+  const start = nsPoolOffset
+  nsPoolOffset += size
+  return nsPoolStr.substring(start, nsPoolOffset)
 }
 
 // Monotonic state
