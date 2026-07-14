@@ -7,7 +7,7 @@ A tiny, secure, URL-friendly unique string ID generator for JavaScript.
 **A faster, more secure alternative to nanoid with extra features!**
 
 <!-- bench:headline:start -->
-- **Faster** - 1.5x to 4x faster than nanoid (CSPRNG, full URL-safe alphabet); wins all 5 core benchmarks ([see benchmarks](#performance))
+- **Faster** - 1.5x to 3x faster than nanoid (CSPRNG, full URL-safe alphabet); wins all 5 core benchmarks ([see benchmarks](#performance))
 <!-- bench:headline:end -->
 - **Security Hardened** - Reduced timing-leak validators, modulo bias elimination, prototype pollution protection ([see security](docs/README.md#security))
 - **Well Tested** - 408 tests including security & entropy tests ([see testing](docs/README.md#testing))
@@ -131,17 +131,17 @@ The full documentation lives in [`docs/README.md`](docs/README.md) (also availab
 The core head-to-head vs the latest installed nanoid (auto-refreshed by CI on every PR):
 
 <!-- bench:meta:start -->
-_Last refreshed: 2026-07-14, Node v22.x, linux/x64 (local)._
+_Last refreshed: 2026-07-14, Node v26.x, ubuntu-latest (GitHub Actions)._
 <!-- bench:meta:end -->
 
 <!-- bench:comparison-table:start -->
 | Test | nanoid 6.0.0 | nope-id | Winner |
 |------|--------|---------|--------|
-| Basic (21 chars) | ~25.6M ops/sec | **~57.7M ops/sec** | **nope-id ~2.3x** |
-| Small (10 chars) | ~34.8M ops/sec | **~54.7M ops/sec** | **nope-id ~1.6x** |
-| Large (64 chars) | ~9.8M ops/sec | **~36.3M ops/sec** | **nope-id ~3.7x** |
-| Custom Alphabet | ~29M ops/sec | **~53.2M ops/sec** | **nope-id ~1.8x** |
-| Batch (100 IDs) | ~212K ops/sec | **~747K ops/sec** | **nope-id ~3.5x** |
+| Basic (21 chars) | ~26.8M ops/sec | **~58.8M ops/sec** | **nope-id ~2.2x** |
+| Small (10 chars) | ~35.4M ops/sec | **~53.2M ops/sec** | **nope-id ~1.5x** |
+| Large (64 chars) | ~10.7M ops/sec | **~34.4M ops/sec** | **nope-id ~3.2x** |
+| Custom Alphabet | ~32M ops/sec | **~66.2M ops/sec** | **nope-id ~2.1x** |
+| Batch (100 IDs) | ~246K ops/sec | **~695K ops/sec** | **nope-id ~2.8x** |
 <!-- bench:comparison-table:end -->
 
 - [Full benchmark tables and methodology](docs/README.md#performance)
