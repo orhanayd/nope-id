@@ -10,7 +10,7 @@
 - **Быстрее** - в 1.4–3 раз быстрее nanoid (CSPRNG, полный URL-безопасный алфавит); выигрывает все 5 основных бенчмарков ([см. бенчмарки](#производительность))
 <!-- bench:headline:end -->
 - **Усиленная безопасность** - Валидаторы с уменьшенной утечкой по времени, устранение modulo bias, защита от prototype pollution ([безопасность](#безопасность))
-- **Хорошо протестирован** - 380 тестов, включая тесты безопасности и энтропии ([тестирование](#тестирование))
+- **Хорошо протестирован** - 405 тестов, включая тесты безопасности и энтропии ([тестирование](#тестирование))
 - **Криптографически безопасный** - Использует `webcrypto.getRandomValues()` (CSPRNG)
 - **Без зависимостей** - Никаких внешних зависимостей
 - **URL-безопасный** - Использует символы `A-Za-z0-9_-`
@@ -544,6 +544,8 @@ const next = monotonicFactory()
 next() < next()     // true (та же мс, строго возрастает)
 ```
 
+`seedTime` должен быть целым числом в диапазоне `[0, 281474976710655]` (48-битный максимум спецификации ULID); всё остальное (NaN, отрицательные, дробные, Date) бросает исключение вместо генерации испорченного ULID.
+
 ### `snowflakeFactory(options)`, `snowflake()` и `decodeSnowflake(id)`
 
 64-битные распределённые ID в стиле Twitter возвращаются как **строки** (BigInt-безопасно). Структура: 41-бит timestamp · 10-бит node id · 12-бит sequence. Каждая фабрика владеет своим состоянием sequence (без координации между узлами).
@@ -557,6 +559,8 @@ decodeSnowflake(id)  // { timestamp: Date, nodeId: 1, sequence: 0 }
 
 snowflake()  // дефолтный single-node генератор (node id выводится из fingerprint)
 ```
+
+`nodeId` должен быть целым числом 0-1023 (значения вне диапазона бросают исключение вместо тихого маскирования, которое могло привести к коллизии двух по-разному настроенных узлов). Некорректные id или epoch бросают `Invalid Snowflake ID` / `Invalid snowflake epoch`.
 
 ### `objectId()` и `decodeObjectIdTime(id)`
 
@@ -677,6 +681,7 @@ import { secureToken } from 'nope-id'
 secureToken()       // 48-символьный URL-safe токен (по умолчанию)
 secureToken(64)     // 64-символьный токен
 secureToken(32)     // 32 это минимум; меньше бросает исключение
+secureToken(65536)  // 65536 это максимум; больше бросает исключение
 ```
 
 - URL-safe алфавит из 64 символов (`A-Za-z0-9_-`)
@@ -993,7 +998,7 @@ nope-id спроектирован с приоритетом безопасно�
 
 ## Тестирование
 
-nope-id имеет покрытие из **380 тестов** по 10 наборам, включая security-специфичные тесты.
+nope-id имеет покрытие из **405 тестов** по 11 наборам, включая security-специфичные тесты.
 
 ### Запуск тестов
 
@@ -1010,25 +1015,27 @@ npm run test:idtypes     # Новые типы ID (uuidv7, ulid, snowflake, obje
 npm run test:encoding    # Sqids, типизированные ID, валидаторы форматов
 npm run test:secure-token # secureToken, apiKey, defineToken
 npm run test:ordered-id  # orderedId, orderedId.many, parse, asciiBytes
-npm run test:parity      # CJS-зеркала совпадают с ESM-сборками
+npm run test:parity      # поверхность ESM/CJS/browser + паритет сообщений об ошибках
 npm run test:tiers       # тиры пополнения customAlphabet (hex / степень двойки / rejection)
+npm run test:pack        # контроль манифеста npm-тарбола (точный список файлов)
 ```
 
 ### Покрытие тестов
 
 | Набор тестов | Тесты | Описание |
 |------------|-------|-------------|
-| **Core** | 82 | nopeid, customAlphabet, customRandom, random, alphabets |
+| **Core** | 85 | nopeid, customAlphabet, customRandom, random, alphabets |
 | **Features** | 79 | prefixedId, sortableId, uuid, slugId, shortId, distributedId |
 | **Utils** | 56 | isValid, collisionProbability, тесты безопасности |
-| **Non-Secure** | 29 | Версия на Math.random() |
-| **ID Types** | 33 | uuidv7, ulid, monotonicFactory, snowflake, objectId |
+| **Non-Secure** | 30 | Версия на Math.random() |
+| **ID Types** | 43 | uuidv7, ulid, monotonicFactory, snowflake, objectId |
 | **Encoding** | 32 | sqids, defineId, isValidUUID, isValidULID |
-| **Secure Token** | 23 | secureToken, apiKey, defineToken |
+| **Secure Token** | 26 | secureToken, apiKey, defineToken |
 | **Ordered ID** | 16 | orderedId, orderedId.many, parse, asciiBytes |
-| **Parity** | 14 | CJS-зеркала (index.cjs, non-secure/index.cjs) |
-| **Alphabet Tiers** | 16 | тиры пополнения customAlphabet, чанкование customRandom |
-| **Всего** | **380** | Все проходят |
+| **Parity** | 17 | поверхность ESM/CJS/browser + байт-идентичные сообщения об ошибках |
+| **Alphabet Tiers** | 19 | тиры пополнения customAlphabet, чанкование customRandom |
+| **Pack Manifest** | 2 | точный список файлов npm-тарбола (посторонние файлы не пройдут) |
+| **Всего** | **405** | Все проходят |
 
 ### Тесты безопасности
 

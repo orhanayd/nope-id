@@ -427,6 +427,25 @@ describe('customAlphabet() edge cases', () => {
       assert.ok(counts[char] < 3500, `${char} count too high: ${counts[char]}`)
     }
   })
+
+  test('size is coerced to an int32 like nopeid (NaN, strings, floats, huge)', () => {
+    const gen = customAlphabet('abcdefgh', 16)
+    assert.equal(gen(NaN), '')
+    assert.equal(gen('8').length, 8)
+    assert.equal(gen(1.9).length, 1)
+    assert.equal(gen(2 ** 32), '') // |0 wraps to 0 instead of reaching the CSPRNG
+    assert.equal(gen(true).length, 1)
+  })
+
+  test('edge-case sizes do not poison the pool (regression: NaN/string offset)', () => {
+    const gen = customAlphabet('abcdefgh', 16)
+    gen(NaN)
+    for (let i = 0; i < 100; i++) {
+      assert.equal(gen(21).length, 21, `call ${i} after NaN must stay 21 chars`)
+    }
+    gen('8')
+    assert.equal(gen(16).length, 16, 'call after string size must stay 16 chars')
+  })
 })
 
 describe('customRandom() edge cases', () => {
@@ -448,6 +467,16 @@ describe('customRandom() edge cases', () => {
     assert.equal(id2.length, 10)
     // With deterministic random, IDs should be predictable (but different due to counter)
     assert.notEqual(id1, id2)
+  })
+
+  test('size is coerced and edge cases do not poison the pool', () => {
+    const gen = customRandom('abcdef', 10, size => random(size))
+    assert.equal(gen(NaN), '')
+    assert.equal(gen().length, 10)
+    assert.equal(gen('8').length, 8)
+    assert.equal(gen(16).length, 16, 'call after string size must stay 16 chars')
+    assert.equal(gen(-3), '')
+    assert.equal(gen().length, 10)
   })
 })
 

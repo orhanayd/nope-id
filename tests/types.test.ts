@@ -6,6 +6,7 @@
 
 import nopeidDefault, {
   alphabets,
+  apiKey,
   collisionProbability,
   customAlphabet,
   customRandom,
@@ -13,6 +14,7 @@ import nopeidDefault, {
   decodeSnowflake,
   decodeTime,
   defineId,
+  defineToken,
   distributedId,
   generateMany,
   getFingerprint,
@@ -26,6 +28,7 @@ import nopeidDefault, {
   orderedId,
   prefixedId,
   random,
+  secureToken,
   shortId,
   slugId,
   snowflake,
@@ -38,12 +41,14 @@ import nopeidDefault, {
   uuidv7,
   type CollisionInfo,
   type DefineIdOptions,
+  type DefineTokenOptions,
   type OrderedIdParts,
   type Sqids,
   type SqidsOptions,
   type SnowflakeOptions,
   type SnowflakeParts,
   type TypedId,
+  type TypedToken,
 } from '../index.js'
 
 // === Core ===
@@ -139,6 +144,27 @@ if (parsed) {
   void tail
 }
 
+// === Secure bearer tokens ===
+const token: string = secureToken()
+const token64: string = secureToken(64)
+const key: string = apiKey()
+const keyCustom: string = apiKey('sk_live', 40)
+const tokenOpts: DefineTokenOptions = { size: 40, separator: '_' }
+const SessionToken: TypedToken<'sess'> = defineToken('sess', tokenOpts)
+const newSession: `sess_${string}` = SessionToken.generate()
+const isSession: boolean = SessionToken.is(newSession)
+const parsedSession = SessionToken.parse(newSession)
+if (parsedSession) {
+  const sessPrefix: 'sess' = parsedSession.prefix
+  const sessBody: string = parsedSession.token
+  void sessPrefix
+  void sessBody
+}
+
+// === decodeSnowflake input union (string | number | bigint) ===
+const snowFromBigInt: SnowflakeParts = decodeSnowflake(123n)
+const snowFromNumber: SnowflakeParts = decodeSnowflake(123)
+
 // === Validators ===
 const okUuid: boolean = isValidUUID(v4)
 const okUuidV7: boolean = isValidUUID(v7, 7)
@@ -151,11 +177,39 @@ const dist: string = distributedId()
 const dist30: string = distributedId(30)
 const fp: string = getFingerprint()
 
+// === nope-id/non-secure surface (resolved via non-secure/index.d.ts) ===
+// The 11 real exports must compile; the secure-only names must NOT resolve.
+import nsDefault, {
+  urlAlphabet as nsUrlAlphabet,
+  alphabets as nsAlphabets,
+  customAlphabet as nsCustomAlphabet,
+  nopeid as nsNopeid,
+  sortableId as nsSortableId,
+  prefixedId as nsPrefixedId,
+  generateMany as nsGenerateMany,
+  isValid as nsIsValid,
+  slugId as nsSlugId,
+  shortId as nsShortId,
+  decodeTime as nsDecodeTime,
+} from '../non-secure/index.js'
+// @ts-expect-error secureToken is secure-only; it must not exist on the non-secure entry
+import { secureToken as nsPhantomToken } from '../non-secure/index.js'
+// @ts-expect-error ulid is secure-only; it must not exist on the non-secure entry
+import { ulid as nsPhantomUlid } from '../non-secure/index.js'
+
+const nsId: string = nsNopeid()
+const nsDefaultId: string = nsDefault()
+const nsHex: string = nsCustomAlphabet(nsAlphabets.hexLower, 8)()
+const nsSorted: Date = nsDecodeTime(nsSortableId())
+
 // Discard everything to silence "declared but never read" warnings.
 void [
   defaultId, id1, id2, empty, hexId, hexId8, customId, bytes, alpha, alphaNum, filename,
   sortable, sortable30, t, userPrefixed, ordPrefixed, many, manyShort, validity, validity2,
   stats64, safe, safeBig, yrs, asyncId, asyncId10, v4, v7, ul, ulSeeded, monoId, monoSeeded,
   snowId, snowDefault, snowDate, snowSeq, oid, oidTime, ord, ordBatch, ordBytes, ordTs, ordCtr, ordRnd, sqEnc, sqDec, newUser, isUser,
+  token, token64, key, keyCustom, newSession, isSession, snowFromBigInt, snowFromNumber,
   okUuid, okUuidV7, okUlid, slug, short, dist, dist30, fp,
+  nsUrlAlphabet, nsPrefixedId, nsGenerateMany, nsIsValid, nsSlugId, nsShortId,
+  nsId, nsDefaultId, nsHex, nsSorted,
 ]

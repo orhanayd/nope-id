@@ -10,7 +10,7 @@ JavaScript için minik, güvenli, URL-dostu benzersiz string ID üreteci.
 - **Daha Hızlı** - nanoid'den 1.4x ila 3x daha hızlı (CSPRNG, tam URL-safe alfabe); 5 temel benchmark'ın hepsini kazanıyor ([benchmark'lara bak](#performans))
 <!-- bench:headline:end -->
 - **Güvenlik Sertleştirilmiş** - Azaltılmış zamanlama sızıntı doğrulayıcıları, modulo bias eliminasyonu, prototype pollution koruması ([güvenlik](#güvenlik))
-- **İyi Test Edilmiş** - Güvenlik ve entropi testleri dahil 380 test ([test etme](#test-etme))
+- **İyi Test Edilmiş** - Güvenlik ve entropi testleri dahil 405 test ([test etme](#test-etme))
 - **Kriptografik Olarak Güvenli** - `webcrypto.getRandomValues()` (CSPRNG) kullanır
 - **Sıfır Bağımlılık** - Dış bağımlılık yok
 - **URL-safe** - `A-Za-z0-9_-` karakterlerini kullanır
@@ -544,6 +544,8 @@ const next = monotonicFactory()
 next() < next()     // true (aynı ms, kesin olarak artar)
 ```
 
+`seedTime`, `[0, 281474976710655]` aralığında bir tamsayı olmalıdır (48-bit ULID spec üst sınırı); diğer her şey (NaN, negatifler, kesirli sayılar, Date nesneleri) bozuk bir ULID üretmek yerine hata fırlatır.
+
 ### `snowflakeFactory(options)`, `snowflake()` & `decodeSnowflake(id)`
 
 Twitter-tarzı 64-bit dağıtık ID'ler **string** olarak döndürülür (BigInt-güvenli). Layout: 41-bit timestamp · 10-bit node id · 12-bit sequence. Her factory kendi sequence state'ine sahiptir (node başına koordinasyonsuz).
@@ -557,6 +559,8 @@ decodeSnowflake(id)  // { timestamp: Date, nodeId: 1, sequence: 0 }
 
 snowflake()  // varsayılan tek-node üreteç (node id fingerprint'ten türetilir)
 ```
+
+`nodeId`, 0-1023 aralığında bir tamsayı olmalıdır (aralık dışı değerler sessizce maskelenmek yerine hata fırlatır; maskeleme farklı yapılandırılmış iki node'u çakıştırabilirdi). Bozuk id veya epoch değerleri `Invalid Snowflake ID` / `Invalid snowflake epoch` hatası fırlatır.
 
 ### `objectId()` & `decodeObjectIdTime(id)`
 
@@ -677,6 +681,7 @@ import { secureToken } from 'nope-id'
 secureToken()       // 48 karakterlik URL-safe token (varsayılan)
 secureToken(64)     // 64 karakterlik token
 secureToken(32)     // 32 minimumdur; daha küçüğü hata fırlatır
+secureToken(65536)  // 65536 maksimumdur; daha büyüğü hata fırlatır
 ```
 
 - URL-safe 64 karakterlik alfabe (`A-Za-z0-9_-`)
@@ -993,7 +998,7 @@ nope-id güvenliği öncelikli olarak tasarlanmıştır. Temel kriptografik rand
 
 ## Test Etme
 
-nope-id, güvenlik-spesifik testler dahil **380 test** ile 10 test suite'inde kapsamlı test kapsamına sahiptir.
+nope-id, güvenlik-spesifik testler dahil **405 test** ile 11 test suite'inde kapsamlı test kapsamına sahiptir.
 
 ### Testleri Çalıştırma
 
@@ -1010,25 +1015,27 @@ npm run test:idtypes     # Yeni ID tipleri (uuidv7, ulid, snowflake, objectId)
 npm run test:encoding    # Sqids, typed ID'ler, format doğrulayıcılar
 npm run test:secure-token # secureToken, apiKey, defineToken
 npm run test:ordered-id  # orderedId, orderedId.many, parse, asciiBytes
-npm run test:parity      # CJS aynaları ESM build'leriyle eşleşiyor mu
+npm run test:parity      # ESM/CJS/browser yüzeyi + hata mesajı paritesi
 npm run test:tiers       # customAlphabet refill tier'ları (hex / 2'nin kuvveti / rejection)
+npm run test:pack        # npm tarball manifest guard'ı (paketlenen dosya listesi)
 ```
 
 ### Test Kapsamı
 
 | Test Suite | Test | Açıklama |
 |------------|-------|-------------|
-| **Core** | 82 | nopeid, customAlphabet, customRandom, random, alphabets |
+| **Core** | 85 | nopeid, customAlphabet, customRandom, random, alphabets |
 | **Features** | 79 | prefixedId, sortableId, uuid, slugId, shortId, distributedId |
 | **Utils** | 56 | isValid, collisionProbability, güvenlik testleri |
-| **Non-Secure** | 29 | Math.random() bazlı versiyon |
-| **ID Types** | 33 | uuidv7, ulid, monotonicFactory, snowflake, objectId |
+| **Non-Secure** | 30 | Math.random() bazlı versiyon |
+| **ID Types** | 43 | uuidv7, ulid, monotonicFactory, snowflake, objectId |
 | **Encoding** | 32 | sqids, defineId, isValidUUID, isValidULID |
-| **Secure Token** | 23 | secureToken, apiKey, defineToken |
+| **Secure Token** | 26 | secureToken, apiKey, defineToken |
 | **Ordered ID** | 16 | orderedId, orderedId.many, parse, asciiBytes |
-| **Parity** | 14 | CJS aynaları (index.cjs, non-secure/index.cjs) |
-| **Alphabet Tiers** | 16 | customAlphabet refill tier'ları, customRandom chunk'lama |
-| **Toplam** | **380** | Hepsi geçiyor |
+| **Parity** | 17 | ESM/CJS/browser yüzeyi + bayt-özdeş hata mesajları |
+| **Alphabet Tiers** | 19 | customAlphabet refill tier'ları, customRandom chunk'lama |
+| **Pack Manifest** | 2 | npm tarball dosya listesi (başıboş dosya paketlenemez) |
+| **Toplam** | **405** | Hepsi geçiyor |
 
 ### Güvenlik Testleri
 

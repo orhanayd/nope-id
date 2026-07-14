@@ -8,7 +8,7 @@ const urlAlphabet =
 
 // Single Set for the default urlAlphabet. isValid() reuses this when the caller
 // passes no custom alphabet, instead of building a fresh 64-element Set per call.
-const URL_ALPHABET_SET = new Set(urlAlphabet)
+const URL_ALPHABET_SET = /* @__PURE__ */ new Set(urlAlphabet)
 
 const alphabets = {
   alphanumeric: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz',

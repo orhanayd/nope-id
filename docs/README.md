@@ -10,7 +10,7 @@ A tiny, secure, URL-friendly unique string ID generator for JavaScript.
 - **Faster** - 1.4x to 3x faster than nanoid (CSPRNG, full URL-safe alphabet); wins all 5 core benchmarks ([see benchmarks](#performance))
 <!-- bench:headline:end -->
 - **Security Hardened** - Reduced timing-leak validators, modulo bias elimination, prototype pollution protection ([see security](#security))
-- **Well Tested** - 380 tests including security & entropy tests ([see testing](#testing))
+- **Well Tested** - 405 tests including security & entropy tests ([see testing](#testing))
 - **Cryptographically Secure** - Uses `webcrypto.getRandomValues()` (CSPRNG)
 - **Zero Dependencies** - No external dependencies
 - **URL-safe** - Uses `A-Za-z0-9_-` characters
@@ -546,6 +546,8 @@ const next = monotonicFactory()
 next() < next()     // true (same ms, strictly increasing)
 ```
 
+`seedTime` must be an integer in `[0, 281474976710655]` (the 48-bit ULID spec maximum); anything else (NaN, negatives, fractions, dates) throws instead of producing a corrupt ULID.
+
 ### `snowflakeFactory(options)`, `snowflake()` & `decodeSnowflake(id)`
 
 Twitter-style 64-bit distributed IDs returned as **strings** (BigInt-safe). Layout: 41-bit timestamp · 10-bit node id · 12-bit sequence. Each factory owns its own sequence state (coordination-free per node).
@@ -559,6 +561,8 @@ decodeSnowflake(id)  // { timestamp: Date, nodeId: 1, sequence: 0 }
 
 snowflake()  // default single-node generator (node id derived from fingerprint)
 ```
+
+`nodeId` must be an integer 0-1023 (out-of-range values throw instead of being silently masked, which could collide two differently-configured nodes). Malformed ids or epochs throw `Invalid Snowflake ID` / `Invalid snowflake epoch`.
 
 ### `objectId()` & `decodeObjectIdTime(id)`
 
@@ -679,6 +683,7 @@ import { secureToken } from 'nope-id'
 secureToken()       // 48-char URL-safe token (default)
 secureToken(64)     // 64-char token
 secureToken(32)     // 32 is the minimum; anything smaller throws
+secureToken(65536)  // 65536 is the maximum; anything larger throws
 ```
 
 - URL-safe 64-char alphabet (`A-Za-z0-9_-`)
@@ -1008,7 +1013,7 @@ nope-id is designed with security as a top priority. We've implemented multiple 
 
 ## Testing
 
-nope-id has comprehensive test coverage with **380 tests** across 10 test suites, including security-specific tests.
+nope-id has comprehensive test coverage with **405 tests** across 11 test suites, including security-specific tests.
 
 ### Run Tests
 
@@ -1025,25 +1030,27 @@ npm run test:idtypes     # New ID types (uuidv7, ulid, snowflake, objectId)
 npm run test:encoding    # Sqids, typed IDs, format validators
 npm run test:secure-token # secureToken, apiKey, defineToken
 npm run test:ordered-id  # orderedId, orderedId.many, parse, asciiBytes
-npm run test:parity      # CJS mirrors match the ESM builds
+npm run test:parity      # ESM/CJS/browser surface + error-message parity
 npm run test:tiers       # customAlphabet refill tiers (hex / pow-2 / rejection)
+npm run test:pack        # npm tarball manifest guard (exact shipped file list)
 ```
 
 ### Test Coverage
 
 | Test Suite | Tests | Description |
 |------------|-------|-------------|
-| **Core** | 82 | nopeid, customAlphabet, customRandom, random, alphabets |
+| **Core** | 85 | nopeid, customAlphabet, customRandom, random, alphabets |
 | **Features** | 79 | prefixedId, sortableId, uuid, slugId, shortId, distributedId |
 | **Utils** | 56 | isValid, collisionProbability, security tests |
-| **Non-Secure** | 29 | Math.random() based version |
-| **ID Types** | 33 | uuidv7, ulid, monotonicFactory, snowflake, objectId |
+| **Non-Secure** | 30 | Math.random() based version |
+| **ID Types** | 43 | uuidv7, ulid, monotonicFactory, snowflake, objectId |
 | **Encoding** | 32 | sqids, defineId, isValidUUID, isValidULID |
-| **Secure Token** | 23 | secureToken, apiKey, defineToken |
+| **Secure Token** | 26 | secureToken, apiKey, defineToken |
 | **Ordered ID** | 16 | orderedId, orderedId.many, parse, asciiBytes |
-| **Parity** | 14 | CJS mirrors (index.cjs, non-secure/index.cjs) |
-| **Alphabet Tiers** | 16 | customAlphabet refill tiers, customRandom chunking |
-| **Total** | **380** | All tests passing |
+| **Parity** | 17 | ESM/CJS/browser surface + byte-identical error messages |
+| **Alphabet Tiers** | 19 | customAlphabet refill tiers, customRandom chunking |
+| **Pack Manifest** | 2 | exact npm tarball file list (no stray files can ship) |
+| **Total** | **405** | All tests passing |
 
 ### Security Tests
 
