@@ -58,6 +58,19 @@ describe('sqidsFactory()', () => {
     assert.equal(a.encode([1, 2, 3]), b.encode([1, 2, 3]))
   })
 
+  test('pinned vectors: exact encode outputs stay stable across releases', () => {
+    // Golden outputs captured from the shipped implementation (also match the
+    // reference sqids-javascript encoder for the default alphabet).
+    assert.equal(sqids.encode([1, 2, 3]), '86Rf07')
+    assert.equal(sqids.encode([0]), 'bM')
+    assert.equal(sqids.encode([1]), 'Uk')
+    assert.equal(sqids.encode([999999999]), 'eH01Y8u')
+    assert.equal(sqids.encode([42, 0, 7, 100000]), 'QuA843fvLF')
+    assert.equal(sqids.encode([0, 0, 0, 0]), '6HgZxWRE')
+    assert.equal(sqidsFactory({ minLength: 10 }).encode([1, 2, 3]), '86Rf07xd4z')
+    assert.equal(sqidsFactory({ alphabet: 'abc123XYZ', blocklist: ['abc'] }).encode([5, 10]), 'cbYba')
+  })
+
   test('different inputs produce different outputs', () => {
     assert.notEqual(sqids.encode([1]), sqids.encode([2]))
     assert.notEqual(sqids.encode([1, 2]), sqids.encode([2, 1]))
