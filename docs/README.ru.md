@@ -1094,7 +1094,7 @@ npm run test:randomness
 ## Производительность
 
 > **Об этих числах.** Эти таблицы автоматически обновляются
-> [GitHub Actions workflow'ом](.github/workflows/benchmark-on-pr.yml) при каждом PR
+> [GitHub Actions workflow'ом](../.github/workflows/benchmark-on-pr.yml) при каждом PR
 > в `main`, на общедоступном раннере `ubuntu-latest`. CI-раннеры обычно медленнее
 > современных машин разработчиков и production-серверов, поэтому на реальном железе
 > nope-id часто показывает **более высокие** числа, чем вы видите здесь.

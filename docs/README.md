@@ -1109,7 +1109,7 @@ npm run test:randomness
 ## Performance
 
 > **About these numbers.** These tables are refreshed automatically by a
-> [GitHub Actions workflow](.github/workflows/benchmark-on-pr.yml) on every PR
+> [GitHub Actions workflow](../.github/workflows/benchmark-on-pr.yml) on every PR
 > against `main`, running on a shared `ubuntu-latest` runner. CI runners are
 > typically slower than modern developer machines and production servers, so on
 > real hardware nope-id often hits **higher** numbers than what you see here.

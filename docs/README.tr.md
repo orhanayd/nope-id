@@ -1094,7 +1094,7 @@ npm run test:randomness
 ## Performans
 
 > **Bu sayılar hakkında.** Bu tablolar `main`'e açılan her PR'da paylaşılan bir `ubuntu-latest` runner'ında çalışan bir
-> [GitHub Actions workflow'u](.github/workflows/benchmark-on-pr.yml) tarafından otomatik yenilenir. CI runner'ları
+> [GitHub Actions workflow'u](../.github/workflows/benchmark-on-pr.yml) tarafından otomatik yenilenir. CI runner'ları
 > tipik olarak modern geliştirici makinelerinden ve production sunucularından daha yavaştır, dolayısıyla gerçek donanımda
 > nope-id genellikle burada gördüğünüzden **daha yüksek** rakamlara ulaşır.
 > Kendi makinenizde sayıları görmek için `npm run benchmark` çalıştırın.
