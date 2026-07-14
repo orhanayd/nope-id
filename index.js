@@ -1086,33 +1086,53 @@ export const sqidsFactory = (options = {}) => {
     throw new Error('Sqids alphabet must contain unique characters')
   }
 
-  // Deterministic shuffle (no PRNG; derived from the alphabet itself)
-  const shuffle = alpha => {
-    const chars = alpha.split('')
-    for (let i = 0, j = chars.length - 1; j > 0; i++, j--) {
-      const r = (i * j + chars[i].charCodeAt(0) + chars[j].charCodeAt(0)) % chars.length
-      const t = chars[i]; chars[i] = chars[r]; chars[r] = t
-    }
-    return chars.join('')
-  }
-  const alphabet = shuffle(baseAlphabet)
+  // The whole codec works on arrays of UTF-16 code units (numbers) instead of
+  // per-char strings: the reference algorithm's split('')/join('')/unshift
+  // churn becomes in-place array ops, with one fromCharCode at the end. Code
+  // units match the reference's split('') semantics exactly (astral chars
+  // behave identically, as two independent units).
+  const alphaLen = baseAlphabet.length
 
-  const toId = (num, alpha) => {
-    const chars = alpha.split('')
-    const id = []
+  // Deterministic shuffle (no PRNG; derived from the alphabet itself),
+  // in place on a working copy.
+  const shuffleCodes = codes => {
+    for (let i = 0, j = codes.length - 1; j > 0; i++, j--) {
+      const r = (i * j + codes[i] + codes[j]) % codes.length
+      const t = codes[i]; codes[i] = codes[r]; codes[r] = t
+    }
+    return codes
+  }
+  // Built per code UNIT (charCodeAt over 0..length-1), NOT via string
+  // iteration — Array.from(string) walks code points and would desync astral
+  // alphabets from the reference's split('') behavior.
+  const alphaCodes = new Array(alphaLen)
+  for (let i = 0; i < alphaLen; i++) alphaCodes[i] = baseAlphabet.charCodeAt(i)
+  shuffleCodes(alphaCodes)
+
+  const codesToString = codes => {
+    if (codes.length <= 4096) return String.fromCharCode.apply(null, codes)
+    let s = ''
+    for (let i = 0; i < codes.length; i += 4096) {
+      s += String.fromCharCode.apply(null, codes.slice(i, i + 4096))
+    }
+    return s
+  }
+
+  // Append num in base (work.length - 1) using work[1..] as digits — the
+  // reference's toId(num, alpha.slice(1)) without the slice/unshift/join.
+  const appendToId = (out, num, work) => {
+    const base = work.length - 1
+    const startLen = out.length
     let n = num
     do {
-      id.unshift(chars[n % chars.length])
-      n = Math.floor(n / chars.length)
+      out.push(work[1 + (n % base)])
+      n = Math.floor(n / base)
     } while (n > 0)
-    return id.join('')
+    for (let a = startLen, b = out.length - 1; a < b; a++, b--) {
+      const t = out[a]; out[a] = out[b]; out[b] = t
+    }
   }
-  const toNumber = (str, alpha) => {
-    const chars = alpha.split('')
-    let n = 0
-    for (const c of str) n = n * chars.length + chars.indexOf(c)
-    return n
-  }
+
   const isBlocked = id => {
     const lower = id.toLowerCase()
     for (const word of blocklist) {
@@ -1129,31 +1149,35 @@ export const sqidsFactory = (options = {}) => {
   }
 
   const encodeNumbers = (numbers, increment = 0) => {
-    if (increment > alphabet.length) throw new Error('Reached max attempts to re-generate the ID')
-    let offset = numbers.reduce(
-      (a, v, i) => alphabet[v % alphabet.length].charCodeAt(0) + i + a,
-      numbers.length
-    ) % alphabet.length
-    offset = (offset + increment) % alphabet.length
-    let alpha = alphabet.slice(offset) + alphabet.slice(0, offset)
-    const prefix = alpha[0]
-    alpha = alpha.split('').reverse().join('')
-    const ret = [prefix]
+    if (increment > alphaLen) throw new Error('Reached max attempts to re-generate the ID')
+    let offset = numbers.length
     for (let i = 0; i < numbers.length; i++) {
-      ret.push(toId(numbers[i], alpha.slice(1)))
+      offset += alphaCodes[numbers[i] % alphaLen] + i
+    }
+    offset %= alphaLen
+    offset = (offset + increment) % alphaLen
+    // work = reverse(rotate(alphabet, offset)); its pre-reverse head is the prefix.
+    const work = new Array(alphaLen)
+    for (let i = 0; i < alphaLen; i++) work[i] = alphaCodes[(offset + i) % alphaLen]
+    const prefixCode = work[0]
+    work.reverse()
+    const out = [prefixCode]
+    for (let i = 0; i < numbers.length; i++) {
+      appendToId(out, numbers[i], work)
       if (i < numbers.length - 1) {
-        ret.push(alpha[0])
-        alpha = shuffle(alpha)
+        out.push(work[0])
+        shuffleCodes(work)
       }
     }
-    let id = ret.join('')
-    if (minLength > id.length) {
-      id += alpha[0]
-      while (minLength - id.length > 0) {
-        alpha = shuffle(alpha)
-        id += alpha.slice(0, Math.min(minLength - id.length, alpha.length))
+    if (minLength > out.length) {
+      out.push(work[0])
+      while (minLength - out.length > 0) {
+        shuffleCodes(work)
+        const take = Math.min(minLength - out.length, alphaLen)
+        for (let i = 0; i < take; i++) out.push(work[i])
       }
     }
+    let id = codesToString(out)
     if (isBlocked(id)) id = encodeNumbers(numbers, increment + 1)
     return id
   }
@@ -1168,22 +1192,35 @@ export const sqidsFactory = (options = {}) => {
     return encodeNumbers(numbers)
   }
 
+  // Reference decode semantics, cheaper: split(separator)/rejoin per round is
+  // just "up to the first separator occurrence", so scan with indexOf instead.
+  const alphabetStr = codesToString(alphaCodes)
   const decode = id => {
     const ret = []
     if (!id) return ret
-    for (const c of id) if (!alphabet.includes(c)) return ret
-    const prefix = id[0]
-    const offset = alphabet.indexOf(prefix)
-    let alpha = alphabet.slice(offset) + alphabet.slice(0, offset)
-    alpha = alpha.split('').reverse().join('')
+    for (const c of id) if (!alphabetStr.includes(c)) return ret
+    const offset = alphabetStr.indexOf(id[0])
+    const work = new Array(alphaLen)
+    for (let i = 0; i < alphaLen; i++) work[i] = alphaCodes[(offset + i) % alphaLen]
+    work.reverse()
     let slug = id.slice(1)
     while (slug.length > 0) {
-      const separator = alpha[0]
-      const chunks = slug.split(separator)
-      if (chunks[0] === '') return ret
-      ret.push(toNumber(chunks[0], alpha.slice(1)))
-      if (chunks.length > 1) alpha = shuffle(alpha)
-      slug = chunks.slice(1).join(separator)
+      const separator = String.fromCharCode(work[0])
+      const sepIdx = slug.indexOf(separator)
+      if (sepIdx === 0) return ret // reference: chunks[0] === ''
+      const chunk = sepIdx === -1 ? slug : slug.slice(0, sepIdx)
+      // toNumber over work[1..]: indexOf(-1) folds in exactly like the
+      // reference's chars.indexOf(c) for anything not in the digit set.
+      const base = alphaLen - 1
+      let n = 0
+      for (const c of chunk) {
+        const pos = c.length === 1 ? work.indexOf(c.charCodeAt(0), 1) : -1
+        n = n * base + (pos === -1 ? -1 : pos - 1)
+      }
+      ret.push(n)
+      if (sepIdx === -1) break
+      shuffleCodes(work)
+      slug = slug.slice(sepIdx + 1)
     }
     return ret
   }
