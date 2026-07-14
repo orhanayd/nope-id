@@ -7,7 +7,7 @@ A tiny, secure, URL-friendly unique string ID generator for JavaScript.
 **A faster, more secure alternative to nanoid with extra features!**
 
 <!-- bench:headline:start -->
-- **Faster** - 1.4x to 3x faster than nanoid (CSPRNG, full URL-safe alphabet); wins all 5 core benchmarks ([see benchmarks](#performance))
+- **Faster** - 1.5x to 3x faster than nanoid (CSPRNG, full URL-safe alphabet); wins all 5 core benchmarks ([see benchmarks](#performance))
 <!-- bench:headline:end -->
 - **Security Hardened** - Reduced timing-leak validators, modulo bias elimination, prototype pollution protection ([see security](docs/README.md#security))
 - **Well Tested** - 405 tests including security & entropy tests ([see testing](docs/README.md#testing))
@@ -128,7 +128,21 @@ The full documentation lives in [`docs/README.md`](docs/README.md) (also availab
 
 ## Performance
 
-nope-id wins all 5 core benchmarks against the latest nanoid. The benchmark tables are refreshed automatically by CI on every PR.
+The core head-to-head vs the latest installed nanoid (auto-refreshed by CI on every PR):
+
+<!-- bench:meta:start -->
+_Last refreshed: 2026-07-14, Node v22.x, darwin/arm64 (local)._
+<!-- bench:meta:end -->
+
+<!-- bench:comparison-table:start -->
+| Test | nanoid 6.0.0 | nope-id | Winner |
+|------|--------|---------|--------|
+| Basic (21 chars) | ~37.5M ops/sec | **~85.8M ops/sec** | **nope-id ~2.3x** |
+| Small (10 chars) | ~50.9M ops/sec | **~79.6M ops/sec** | **nope-id ~1.6x** |
+| Large (64 chars) | ~14.7M ops/sec | **~51.1M ops/sec** | **nope-id ~3.5x** |
+| Custom Alphabet | ~44.6M ops/sec | **~82.5M ops/sec** | **nope-id ~1.9x** |
+| Batch (100 IDs) | ~367K ops/sec | **~1.1M ops/sec** | **nope-id ~3.1x** |
+<!-- bench:comparison-table:end -->
 
 - [Full benchmark tables and methodology](docs/README.md#performance)
 - Run locally: `npm run benchmark`

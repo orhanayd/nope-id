@@ -1,7 +1,7 @@
 // scripts/update-readme.js
-// Refresh the slim root README.md (headline region only) and the full docs
-// READMEs — docs/README.md, docs/README.tr.md, docs/README.ru.md (all
-// regions) — from a benchmark JSON file.
+// Refresh the slim root README.md (headline + meta + comparison-table regions)
+// and the full docs READMEs — docs/README.md, docs/README.tr.md,
+// docs/README.ru.md (all regions) — from a benchmark JSON file.
 // Usage: node scripts/update-readme.js <bench.json>
 //
 // Each auto-managed region in a README is bracketed by HTML comment markers:
@@ -479,9 +479,10 @@ const refresh = (filePath, loc, markers) => {
 
 const DOCS = join(REPO_ROOT, 'docs')
 const TARGETS = [
-  // Slim root README carries ONLY the live headline bullet; every other
-  // bench region lives in the full docs/ READMEs.
-  { path: join(REPO_ROOT, 'README.md'), locale: 'en', markers: ['headline'] },
+  // Slim root README carries the live headline bullet plus a compact summary
+  // (meta line + core comparison table); every other bench region lives in
+  // the full docs/ READMEs.
+  { path: join(REPO_ROOT, 'README.md'), locale: 'en', markers: ['headline', 'meta', 'comparison-table'] },
   { path: join(DOCS, 'README.md'),      locale: 'en' },
   { path: join(DOCS, 'README.tr.md'),   locale: 'tr' },
   { path: join(DOCS, 'README.ru.md'),   locale: 'ru' },
