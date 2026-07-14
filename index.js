@@ -507,7 +507,9 @@ const validTableFor = alphabet => {
 
 // Validate a string against an alphabet. Non-short-circuit table scan (avoids the
 // naive first-bad-char timing oracle; NOT strictly constant-time); charCodeAt +
-// table beats Set.has per-char allocation.
+// table beats Set.has per-char allocation. The table loop is 4-wide unrolled;
+// chars > 255 read past the table (undefined) and zero `valid` via `&`, exactly
+// like the single-step loop.
 export const isValid = (id, alphabet = urlAlphabet) => {
   if (typeof id !== 'string' || id.length === 0) return false
 
@@ -521,10 +523,15 @@ export const isValid = (id, alphabet = urlAlphabet) => {
     }
     return valid === 1
   }
+  const n = id.length
+  const n4 = n - 3
   let valid = 1
-  for (let i = 0; i < id.length; i++) {
-    valid &= table[id.charCodeAt(i)]
+  let i = 0
+  for (; i < n4; i += 4) {
+    valid &= table[id.charCodeAt(i)] & table[id.charCodeAt(i + 1)] &
+      table[id.charCodeAt(i + 2)] & table[id.charCodeAt(i + 3)]
   }
+  for (; i < n; i++) valid &= table[id.charCodeAt(i)]
   return valid === 1
 }
 
@@ -565,9 +572,11 @@ export const nopeidAsync = async (size = 21) => {
   return nopeid(size)
 }
 
-// UUID v4 pool: pre-formatted 4096-slot refill (own 16 CSPRNG bytes per UUID,
+// UUID v4 pool: pre-formatted 1820-slot refill (own 16 CSPRNG bytes per UUID,
 // v4/variant bits patched, hyphens pre-baked); one 36-char substring per call.
-const UUID_POOL_COUNT = 4096
+// 1820 slots keep the pool string at 65520 chars — under V8's large-string
+// allocation cliff (a 4096-slot / 147KB string measurably slowed refills).
+const UUID_POOL_COUNT = 1820
 const UUID_POOL_BYTES = UUID_POOL_COUNT * 36
 
 // byte → both hex char codes packed for one 16-bit LE store; DataView because
@@ -767,16 +776,27 @@ export const ulid = (seedTime = Date.now()) => {
 }
 
 // Monotonic ULID factory with ISOLATED state (does not touch global sortableId state).
-// Same/backwards-ms calls bump the random part as a base-32 counter, rewriting only
-// the changed byte(s) in the reused scratch.
+// Same/backwards-ms calls bump the random part as a base-32 counter. The hot path
+// (last digit not saturated) is a cached 25-char head + one tail char code — no
+// per-call Buffer→string conversion; the head is rebuilt only on digit carry or a
+// new timestamp.
 export const monotonicFactory = () => {
   let lastTime = NaN // NaN sentinel: <= matches no seed, so the first call always encodes
   let lastRand = []
-  const out = Buffer.allocUnsafe(26)
+  const out = Buffer.allocUnsafe(25) // scratch for the head; the tail char is tracked separately
+  let head25 = ''
+  let tailCode = 0
   return (seedTime = Date.now()) => {
     if (seedTime <= lastTime) {
-      seedTime = lastTime
-      for (let i = 15; i >= 0; i--) {
+      if (lastRand[15] < 31) {
+        // Common case: only the last counter digit advances — head25 stays valid.
+        tailCode = CROCKFORD_CODES[++lastRand[15]]
+        return head25 + String.fromCharCode(tailCode)
+      }
+      // Tail saturated: propagate the carry into the head digits, then rebuild.
+      lastRand[15] = 0
+      tailCode = CROCKFORD_CODES[0]
+      for (let i = 14; i >= 0; i--) {
         if (lastRand[i] < 31) {
           lastRand[i]++
           out[10 + i] = CROCKFORD_CODES[lastRand[i]]
@@ -785,6 +805,7 @@ export const monotonicFactory = () => {
         lastRand[i] = 0
         out[10 + i] = CROCKFORD_CODES[0]
       }
+      head25 = out.toString('latin1', 0, 25)
     } else if (isUlidTime(seedTime)) {
       // Manual loop instead of Array.from(arr, fn) so we don't rely on V8 hoisting.
       lastTime = seedTime
@@ -792,14 +813,17 @@ export const monotonicFactory = () => {
       lastRand = new Array(16)
       let ms = seedTime
       for (let i = 9; i >= 0; i--) { out[i] = CROCKFORD_CODES[ms % 32]; ms = Math.floor(ms / 32) }
-      for (let i = 0; i < 16; i++) {
+      for (let i = 0; i < 15; i++) {
         lastRand[i] = bytes[i] & 31
         out[10 + i] = CROCKFORD_CODES[lastRand[i]]
       }
+      lastRand[15] = bytes[15] & 31
+      tailCode = CROCKFORD_CODES[lastRand[15]]
+      head25 = out.toString('latin1', 0, 25)
     } else {
       throw new Error(ULID_TIME_ERROR)
     }
-    return out.toString('latin1', 0, 26)
+    return head25 + String.fromCharCode(tailCode)
   }
 }
 
@@ -873,12 +897,15 @@ export const decodeSnowflake = (id, epoch = DEFAULT_SNOWFLAKE_EPOCH) => {
 
 // === MongoDB ObjectId compatible (24-char hex) ===
 
-// ObjectId: the 18-hex ts+machine prefix changes at most once per second and is
-// cached as one string; each call formats only the 6-hex-char counter.
+// ObjectId: the 22-hex ts+machine+counter-head cache changes only on a new
+// second or a counter low-byte rollover (every 256 calls); each call appends
+// just the counter's low hex pair — a two-piece concat.
 let oidCounter = 0     // 3-byte incrementing counter (lazy random start)
 let oidLastSec = -1    // second the cached prefix was built for
 let oidPrefix = null   // 18 hex chars: 8 timestamp + 10 machine (null = lazy init pending)
 let oidMachineHex = ''
+let oidHead = ''       // 22 hex chars: prefix + counter's high 4 hex digits
+let oidLastHi = -1     // oidCounter >>> 8 the cached head was built for
 export const objectId = () => {
   if (oidPrefix === null) {
     const m = randomView(5)
@@ -888,15 +915,18 @@ export const objectId = () => {
     oidCounter = (c[0] << 16) | (c[1] << 8) | c[2]
   }
   const sec = Math.floor(Date.now() / 1000) // not |0: stays valid past 2038
-  if (sec !== oidLastSec) {
-    oidLastSec = sec
-    oidPrefix = byteToHex[(sec >>> 24) & 0xff] + byteToHex[(sec >>> 16) & 0xff] +
-      byteToHex[(sec >>> 8) & 0xff] + byteToHex[sec & 0xff] + oidMachineHex
-  }
   oidCounter = (oidCounter + 1) & 0xffffff
-  return oidPrefix +
-    byteToHex[(oidCounter >>> 16) & 0xff] + byteToHex[(oidCounter >>> 8) & 0xff] +
-    byteToHex[oidCounter & 0xff]
+  const hi = oidCounter >>> 8 // increment FIRST so the head matches this call's counter
+  if (sec !== oidLastSec || hi !== oidLastHi) {
+    if (sec !== oidLastSec) {
+      oidLastSec = sec
+      oidPrefix = byteToHex[(sec >>> 24) & 0xff] + byteToHex[(sec >>> 16) & 0xff] +
+        byteToHex[(sec >>> 8) & 0xff] + byteToHex[sec & 0xff] + oidMachineHex
+    }
+    oidLastHi = hi
+    oidHead = oidPrefix + byteToHex[(hi >>> 8) & 0xff] + byteToHex[hi & 0xff]
+  }
+  return oidHead + byteToHex[oidCounter & 0xff]
 }
 
 // 24-char hex pattern: rejects non-hex input at the boundary (a length-only
