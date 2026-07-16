@@ -9,6 +9,10 @@ import { createRequire } from 'node:module'
 import { test, describe, runTests, assert } from './test-utils.js'
 import * as esm from '../index.js'
 import * as esmNonSecure from '../non-secure/index.js'
+// Surface + validation-error checks only: module evaluation touches no CSPRNG,
+// and every trigger below throws before any crypto call, so this stays
+// runnable under plain `npm test` even without a webcrypto global.
+import * as browser from '../index.browser.js'
 
 const require = createRequire(import.meta.url)
 const cjs = require('../index.cjs')
@@ -101,11 +105,66 @@ describe('index.cjs behavioral contract', () => {
   })
 })
 
+describe('index.browser.js export surface', () => {
+  test('browser surface matches the ESM module exactly (both directions)', () => {
+    assert.deepEqual(
+      Object.keys(browser).sort(),
+      Object.keys(esm).sort(),
+      'browser exports must equal ESM exports'
+    )
+  })
+})
+
+describe('error-message parity across the three secure builds', () => {
+  test('every validation error message is byte-identical in esm/cjs/browser', () => {
+    // Each trigger throws during validation, before any CSPRNG is touched.
+    const triggers = [
+      m => m.customAlphabet(''),
+      m => m.customAlphabet('a'.repeat(257)),
+      m => m.customAlphabet('aab'),
+      m => m.customRandom('ab', 10, () => new Uint8Array(1))(),
+      m => m.ulid(NaN),
+      m => m.ulid(-1),
+      m => m.monotonicFactory()(2 ** 49),
+      m => m.snowflakeFactory({ nodeId: 4096 }),
+      m => m.snowflakeFactory({ epoch: 'x' }),
+      m => m.decodeSnowflake('abc'),
+      m => m.decodeSnowflake('123', 'x'),
+      m => m.secureToken(1),
+      m => m.secureToken(65537),
+      m => m.defineToken('x', { size: 1 }),
+      m => m.defineToken('x', { size: 65537 }),
+      m => m.apiKey(''),
+      m => m.apiKey('has space'),
+      m => m.defineId(5),
+      m => m.defineId('u', { size: 0 }),
+      m => m.orderedId.parse('short'),
+      m => m.orderedId.parse('0'.repeat(21)),
+      m => m.generateMany(2000000),
+      m => m.orderedId.many(2000000),
+      m => m.distributedId(4),
+      m => m.decodeObjectIdTime('zz'),
+      m => m.decodeTime(null),
+    ]
+    const msgs = mod => triggers.map(t => { try { t(mod); return null } catch (e) { return e.message } })
+    const fromEsm = msgs(esm)
+    assert.ok(fromEsm.every(m => m !== null), 'every trigger must throw in ESM')
+    assert.deepEqual(msgs(cjs), fromEsm, 'CJS messages must match ESM')
+    assert.deepEqual(msgs(browser), fromEsm, 'browser messages must match ESM')
+  })
+})
+
 describe('non-secure/index.cjs parity', () => {
   test('every non-secure ESM named export exists on the CJS module', () => {
     const esmKeys = Object.keys(esmNonSecure).filter(k => k !== 'default')
     const missing = esmKeys.filter(k => !(k in cjsNonSecure))
     assert.deepEqual(missing, [], `non-secure CJS is missing: ${missing.join(', ')}`)
+  })
+
+  test('non-secure CJS has no extra exports beyond the ESM surface', () => {
+    const esmKeys = new Set(Object.keys(esmNonSecure))
+    const extra = Object.keys(cjsNonSecure).filter(k => !esmKeys.has(k))
+    assert.deepEqual(extra, [], `non-secure CJS has extra exports: ${extra.join(', ')}`)
   })
 
   test('nopeid: default 21 chars, URL-safe, size honored', () => {

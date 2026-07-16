@@ -75,6 +75,15 @@ describe('non-secure customAlphabet()', () => {
     const gen = customAlphabet('abc', 10)
     assert.equal(gen(5).length, 5)
   })
+
+  test('edge-case sizes return "" and leave the generator healthy', () => {
+    // The non-secure build has no pool to poison (per-call fromCharCode),
+    // but pin the same external contract as the secure builds.
+    const gen = customAlphabet('abcdefgh', 16)
+    assert.equal(gen(NaN), '')
+    assert.equal(gen(-3), '')
+    for (let i = 0; i < 20; i++) assert.match(gen(), /^[a-h]{16}$/)
+  })
 })
 
 describe('non-secure prefixedId()', () => {

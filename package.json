@@ -1,6 +1,6 @@
 {
 	"name": "nope-id",
-	"version": "1.4.0",
+	"version": "1.4.1",
 	"description": "A tiny, fast, secure, URL-friendly unique string ID generator. ESM & CommonJS. Nanoid alternative with extra features (prefixed IDs, sortable IDs, UUID, distributed IDs).",
 	"type": "module",
 	"main": "index.cjs",
@@ -8,8 +8,10 @@
 	"types": "index.d.ts",
 	"exports": {
 		".": {
+			"react-native": "./index.browser.js",
 			"import": {
 				"types": "./index.d.ts",
+				"browser": "./index.browser.js",
 				"default": "./index.js"
 			},
 			"require": {
@@ -20,11 +22,11 @@
 		},
 		"./non-secure": {
 			"import": {
-				"types": "./index.d.ts",
+				"types": "./non-secure/index.d.ts",
 				"default": "./non-secure/index.js"
 			},
 			"require": {
-				"types": "./index.d.ts",
+				"types": "./non-secure/index.d.ts",
 				"default": "./non-secure/index.cjs"
 			},
 			"browser": "./non-secure/index.js"
@@ -55,6 +57,7 @@
 		"test:ordered-id": "node tests/ordered-id.test.js",
 		"test:parity": "node tests/parity.test.js",
 		"test:tiers": "node tests/custom-alphabet-tiers.test.js",
+		"test:pack": "node tests/pack.test.js",
 		"test:randomness": "node tests/randomness.test.js",
 		"test:types": "tsc --noEmit --strict --target es2022 --module nodenext --moduleResolution nodenext --allowImportingTsExtensions false tests/types.test.ts",
 		"test:browser": "node tests/browser.test.js",
@@ -93,8 +96,7 @@
 		"index.cjs",
 		"index.browser.js",
 		"index.d.ts",
-		"non-secure",
-		"CHANGELOG.txt"
+		"non-secure"
 	],
 	"devDependencies": {
 		"@lukeed/uuid": "^2.0.1",

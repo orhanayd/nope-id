@@ -54,6 +54,13 @@ describe('customAlphabet tier 1 (native hex)', () => {
     assert.equal(big.length, 70001)
     assert.match(big, /^[0-9a-f]+$/)
   })
+
+  test('hex tier: NaN/huge sizes return "" and leave the pool healthy', () => {
+    const gen = customAlphabet(alphabets.hexLower, 16)
+    assert.equal(gen(NaN), '')
+    assert.equal(gen(2 ** 32), '')
+    for (let i = 0; i < 50; i++) assert.match(gen(), /^[0-9a-f]{16}$/)
+  })
 })
 
 describe('customAlphabet tier 2 (power-of-2 bulk translate)', () => {
@@ -66,6 +73,13 @@ describe('customAlphabet tier 2 (power-of-2 bulk translate)', () => {
     const big = gen(40000)
     assert.equal(big.length, 40000)
     assert.match(big, /^[A-Z2-7]+$/)
+  })
+
+  test('pow-2 tier: NaN/huge sizes return "" and leave the pool healthy', () => {
+    const gen = customAlphabet(alphabets.base32, 20)
+    assert.equal(gen(NaN), '')
+    assert.equal(gen(2 ** 32), '')
+    for (let i = 0; i < 50; i++) assert.match(gen(), /^[A-Z2-7]{20}$/)
   })
 })
 
@@ -89,6 +103,36 @@ describe('customAlphabet tier 3 (non-pow-2 bulk rejection)', () => {
     const big = gen(40000)
     assert.equal(big.length, 40000)
     assert.match(big, /^[1-9A-HJ-NP-Za-km-z]+$/)
+  })
+
+  test('non-pow-2 cold path with an ODD size: exact length (no pair-write overrun)', () => {
+    const gen = customAlphabet(alphabets.base58, 21)
+    const big = gen(40001)
+    assert.equal(big.length, 40001)
+    assert.match(big, /^[1-9A-HJ-NP-Za-km-z]+$/)
+  })
+
+  test('large non-pow-2 alphabet (len 200, byte-wise sub-tier): length, charset, coverage', () => {
+    // len in [182, 255] keeps byte-wise rejection (better yield than u16 pairs)
+    let big200 = ''
+    for (let i = 0; i < 200; i++) big200 += String.fromCharCode(0x21 + i)
+    const gen = customAlphabet(big200, 16)
+    const seen = new Set()
+    for (let i = 0; i < 5000; i++) {
+      const id = gen()
+      assert.equal(id.length, 16)
+      for (const ch of id) seen.add(ch)
+    }
+    assert.equal(seen.size, 200)
+    const cold = gen(40001)
+    assert.equal(cold.length, 40001)
+  })
+
+  test('rejection tier: NaN/huge sizes return "" and leave the pool healthy', () => {
+    const gen = customAlphabet(alphabets.base58, 21)
+    assert.equal(gen(NaN), '')
+    assert.equal(gen(2 ** 32), '')
+    for (let i = 0; i < 50; i++) assert.match(gen(), /^[1-9A-HJ-NP-Za-km-z]{21}$/)
   })
 })
 

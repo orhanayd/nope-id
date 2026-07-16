@@ -4,6 +4,9 @@ import { secureToken, apiKey, defineToken, isValid, urlAlphabet } from '../index
 
 const URL_SAFE_RE = /^[A-Za-z0-9_-]+$/
 
+// assert.throws ignores messages; msgOf pins the exact error text.
+const msgOf = fn => { try { fn(); return null } catch (e) { return e.message } }
+
 describe('secureToken()', () => {
   test('default size is 48 chars, URL-safe', () => {
     const t = secureToken()
@@ -35,10 +38,17 @@ describe('secureToken()', () => {
     assert.equal(seen.size, 2000)
   })
 
-  test('large size works (>MAX_POOL_SIZE chunked fill)', () => {
-    const t = secureToken(100000)
-    assert.equal(t.length, 100000)
+  test('size at the 65536 maximum works', () => {
+    const t = secureToken(65536)
+    assert.equal(t.length, 65536)
     assert.match(t, URL_SAFE_RE)
+  })
+
+  test('throws above the 65536 max with a pinned message (was a native crash)', () => {
+    const MAX_ERR = 'secureToken size must be an integer between 32 and 65536'
+    for (const bad of [65537, 2 ** 31, 1e10]) {
+      assert.equal(msgOf(() => secureToken(bad)), MAX_ERR, `size ${bad} must throw`)
+    }
   })
 })
 
@@ -62,6 +72,11 @@ describe('apiKey()', () => {
   test('throws on prefix with whitespace', () => {
     assert.throws(() => apiKey('has space'))
     assert.throws(() => apiKey('tab\there'))
+  })
+
+  test('over-max size throws through the secureToken delegation', () => {
+    assert.throws(() => apiKey('sk', 1e10))
+    assert.throws(() => apiKey('sk', 65537))
   })
 
   test('throws on non-string prefix', () => {
@@ -136,6 +151,13 @@ describe('defineToken()', () => {
 
   test('throws when size < 32', () => {
     assert.throws(() => defineToken('sess', { size: 31 }))
+  })
+
+  test('throws above the 65536 max with a pinned message', () => {
+    assert.equal(
+      msgOf(() => defineToken('sess', { size: 65537 })),
+      'Token size must be an integer between 32 and 65536'
+    )
   })
 
   test('respects custom separator', () => {

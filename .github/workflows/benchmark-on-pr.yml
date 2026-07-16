@@ -86,7 +86,7 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           # Stage only README files that actually exist (translations may be added incrementally).
-          for f in README.md README.tr.md README.ru.md; do
+          for f in README.md docs/README.md docs/README.tr.md docs/README.ru.md; do
             [ -f "$f" ] && git add "$f"
           done
           if git diff --cached --quiet; then

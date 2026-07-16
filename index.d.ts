@@ -221,8 +221,10 @@ export function uuidv7(): string
  * Generate a spec-compliant 26-char ULID (Crockford Base32).
  * 10 chars timestamp + 16 chars randomness. Non-monotonic per call;
  * use monotonicFactory() for guaranteed same-millisecond ordering.
- * @param seedTime - Optional timestamp in ms (default: Date.now())
+ * @param seedTime - Optional timestamp in ms (default: Date.now());
+ *   must be an integer in [0, 281474976710655] (the 48-bit ULID spec max)
  * @returns 26-character ULID string (decode the time with decodeTime())
+ * @throws Error if seedTime is not an integer within the 48-bit range
  */
 export function ulid(seedTime?: number): string
 
@@ -230,6 +232,8 @@ export function ulid(seedTime?: number): string
  * Create a monotonic ULID generator with isolated state.
  * Same/backwards-millisecond calls increment the random part so output is
  * strictly increasing. Does not touch the global sortableId() state.
+ * The generator throws if a fresh seedTime is not an integer in
+ * [0, 281474976710655] (the 48-bit ULID spec max).
  * @returns A function that generates monotonic 26-char ULIDs
  */
 export function monotonicFactory(): (seedTime?: number) => string
@@ -254,6 +258,8 @@ export interface SnowflakeParts {
  * Layout: 41-bit timestamp | 10-bit nodeId | 12-bit sequence.
  * Each factory owns its own sequence/timestamp state (coordination-free per node).
  * @returns A function that returns the next snowflake id as a string
+ * @throws Error if nodeId is not an integer in [0, 1023], or epoch cannot be
+ *   converted to a BigInt
  */
 export function snowflakeFactory(options?: SnowflakeOptions): () => string
 
@@ -264,11 +270,13 @@ export function snowflakeFactory(options?: SnowflakeOptions): () => string
 export function snowflake(): string
 
 /**
- * Decode a snowflake id string into its components.
- * @param id - Snowflake id string
+ * Decode a snowflake id into its components.
+ * @param id - Snowflake id: digit string (recommended — 64-bit ids exceed
+ *   Number.MAX_SAFE_INTEGER), bigint, or safe non-negative integer
  * @param epoch - Epoch used at generation (default: Twitter epoch)
+ * @throws Error ('Invalid Snowflake ID' / 'Invalid snowflake epoch') on malformed input
  */
-export function decodeSnowflake(id: string, epoch?: number | bigint): SnowflakeParts
+export function decodeSnowflake(id: string | number | bigint, epoch?: number | bigint): SnowflakeParts
 
 /**
  * Generate a MongoDB ObjectId-compatible 24-char hex id.
@@ -355,8 +363,8 @@ export function isValidULID(id: string): boolean
  * fills it from CSPRNG, maps to the alphabet, and zeros the raw bytes before
  * returning. The returned JavaScript string itself cannot be zeroized — store
  * HASHED tokens (e.g. SHA-256) in your database, never the raw token.
- * @param size - Token length in characters (default 48, min 32)
- * @throws Error if size is not an integer >= 32
+ * @param size - Token length in characters (default 48, min 32, max 65536)
+ * @throws Error if size is not an integer in [32, 65536]
  */
 export function secureToken(size?: number): string
 
@@ -365,13 +373,13 @@ export function secureToken(size?: number): string
  * Body is generated via {@link secureToken}. Store HASHED API keys.
  * @param prefix - Brand/scope prefix (default 'nope_live'). Must be non-empty
  *                 and contain no whitespace; everything else is up to you.
- * @param size - Body length in characters (default 40, min 32)
+ * @param size - Body length in characters (default 40, min 32, max 65536)
  */
 export function apiKey(prefix?: string, size?: number): string
 
 /** Options for {@link defineToken} */
 export interface DefineTokenOptions {
-  /** Body length (default 40, min 32) */
+  /** Body length (default 40, min 32, max 65536) */
   size?: number
   /** Separator between prefix and body (default '_') */
   separator?: string
