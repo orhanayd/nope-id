@@ -7,7 +7,7 @@ A tiny, secure, URL-friendly unique string ID generator for JavaScript.
 **A faster, more secure alternative to nanoid with extra features!**
 
 <!-- bench:headline:start -->
-- **Faster** - 1.5x to 3x faster than nanoid (CSPRNG, full URL-safe alphabet); wins all 5 core benchmarks ([see benchmarks](#performance))
+- **Faster** - 1.4x to 3x faster than nanoid (CSPRNG, full URL-safe alphabet); wins all 5 core benchmarks ([see benchmarks](#performance))
 <!-- bench:headline:end -->
 - **Security Hardened** - Reduced timing-leak validators, modulo bias elimination, prototype pollution protection ([see security](docs/README.md#security))
 - **Well Tested** - 408 tests including security & entropy tests ([see testing](docs/README.md#testing))
@@ -131,17 +131,17 @@ The full documentation lives in [`docs/README.md`](docs/README.md) (also availab
 The core head-to-head vs the latest installed nanoid (auto-refreshed by CI on every PR):
 
 <!-- bench:meta:start -->
-_Last refreshed: 2026-07-14, Node v26.x, ubuntu-latest (GitHub Actions)._
+_Last refreshed: 2026-07-16, Node v26.x, ubuntu-latest (GitHub Actions)._
 <!-- bench:meta:end -->
 
 <!-- bench:comparison-table:start -->
 | Test | nanoid 6.0.0 | nope-id | Winner |
 |------|--------|---------|--------|
-| Basic (21 chars) | ~36.1M ops/sec | **~78.2M ops/sec** | **nope-id ~2.2x** |
-| Small (10 chars) | ~48.7M ops/sec | **~73.8M ops/sec** | **nope-id ~1.5x** |
-| Large (64 chars) | ~13.8M ops/sec | **~46.6M ops/sec** | **nope-id ~3.4x** |
-| Custom Alphabet | ~41M ops/sec | **~91.8M ops/sec** | **nope-id ~2.2x** |
-| Batch (100 IDs) | ~343K ops/sec | **~1.0M ops/sec** | **nope-id ~3x** |
+| Basic (21 chars) | ~27.4M ops/sec | **~58.2M ops/sec** | **nope-id ~2.1x** |
+| Small (10 chars) | ~36.9M ops/sec | **~52.2M ops/sec** | **nope-id ~1.4x** |
+| Large (64 chars) | ~10.8M ops/sec | **~33.8M ops/sec** | **nope-id ~3.1x** |
+| Custom Alphabet | ~32.8M ops/sec | **~70M ops/sec** | **nope-id ~2.1x** |
+| Batch (100 IDs) | ~269K ops/sec | **~779K ops/sec** | **nope-id ~2.9x** |
 <!-- bench:comparison-table:end -->
 
 - [Full benchmark tables and methodology](docs/README.md#performance)
