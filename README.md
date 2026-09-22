@@ -131,17 +131,17 @@ The full documentation lives in [`docs/README.md`](docs/README.md) (also availab
 The core head-to-head vs the latest installed nanoid (auto-refreshed by CI on every PR):
 
 <!-- bench:meta:start -->
-_Last refreshed: 2026-07-16, Node v26.x, ubuntu-latest (GitHub Actions)._
+_Last refreshed: 2026-09-22, Node v26.x, ubuntu-latest (GitHub Actions)._
 <!-- bench:meta:end -->
 
 <!-- bench:comparison-table:start -->
-| Test | nanoid 6.0.0 | nope-id | Winner |
+| Test | nanoid 6.0.1 | nope-id | Winner |
 |------|--------|---------|--------|
-| Basic (21 chars) | ~27.4M ops/sec | **~58.2M ops/sec** | **nope-id ~2.1x** |
-| Small (10 chars) | ~36.9M ops/sec | **~52.2M ops/sec** | **nope-id ~1.4x** |
-| Large (64 chars) | ~10.8M ops/sec | **~33.8M ops/sec** | **nope-id ~3.1x** |
-| Custom Alphabet | ~32.8M ops/sec | **~70M ops/sec** | **nope-id ~2.1x** |
-| Batch (100 IDs) | ~269K ops/sec | **~779K ops/sec** | **nope-id ~2.9x** |
+| Basic (21 chars) | ~26.7M ops/sec | **~55.7M ops/sec** | **nope-id ~2.1x** |
+| Small (10 chars) | ~35.3M ops/sec | **~51.5M ops/sec** | **nope-id ~1.5x** |
+| Large (64 chars) | ~10.8M ops/sec | **~32.9M ops/sec** | **nope-id ~3x** |
+| Custom Alphabet | ~32.4M ops/sec | **~67.2M ops/sec** | **nope-id ~2.1x** |
+| Batch (100 IDs) | ~258K ops/sec | **~759K ops/sec** | **nope-id ~2.9x** |
 <!-- bench:comparison-table:end -->
 
 - [Full benchmark tables and methodology](docs/README.md#performance)
