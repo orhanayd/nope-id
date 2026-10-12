@@ -10,12 +10,12 @@ A tiny, secure, URL-friendly unique string ID generator for JavaScript.
 - **Faster** - 1.4x to 3x faster than nanoid (CSPRNG, full URL-safe alphabet); wins all 5 core benchmarks ([see benchmarks](#performance))
 <!-- bench:headline:end -->
 - **Security Hardened** - Reduced timing-leak validators, modulo bias elimination, prototype pollution protection ([see security](docs/README.md#security))
-- **Well Tested** - 408 tests including security & entropy tests ([see testing](docs/README.md#testing))
-- **Cryptographically Secure** - Uses `webcrypto.getRandomValues()` (CSPRNG)
+- **Well Tested** - 429 tests including security & entropy tests ([see testing](docs/README.md#testing))
+- **Cryptographically Secure** - Uses the platform CSPRNG (`crypto.randomFillSync()` in Node.js, `crypto.getRandomValues()` in browsers)
 - **Zero Dependencies** - No external dependencies
 - **URL-safe** - Uses `A-Za-z0-9_-` characters
 - **Dual Module** - Works with both ESM (`import`) and CommonJS (`require`)
-- **TypeScript** - Full type definitions included
+- **TypeScript** - Full type definitions for both `import` and `require`
 - **Collision-resistant** - Strictly-monotonic sortable IDs, origin-tagged distributed IDs
 - **Many ID Formats** - UUID v4 & **v7**, **ULID** (spec-compliant + monotonic factory), **Snowflake**, **MongoDB ObjectId**
 - **Extra Features** - Prefixed IDs, sortable IDs, **Sqids** (reversible encoding), **typed IDs**, format validators, and more!
@@ -100,7 +100,7 @@ ulid()              // "01ARZ3NDEKTSV4RRFFQ69G5FAV"
 decodeTime(ulid())  // Date
 ```
 
-Secure bearer tokens — API keys, session tokens ([more](docs/README.md#secure-tokens-bearer-secrets)):
+Secure bearer tokens for API keys and session tokens ([more](docs/README.md#secure-tokens-bearer-secrets)):
 
 ```javascript
 import { secureToken, apiKey } from 'nope-id'
@@ -113,14 +113,15 @@ apiKey('sk_live', 40)  // "sk_live_<40 chars>"
 
 The full documentation lives in [`docs/README.md`](docs/README.md) (also available in [Türkçe](docs/README.tr.md) and [Русский](docs/README.ru.md)):
 
-- [API Reference](docs/README.md#api-reference) — core functions, generators, utilities, [pre-built alphabets](docs/README.md#pre-built-alphabets)
-- [Additional ID formats](docs/README.md#additional-id-formats--helpers) — UUID v4/v7, ULID, Snowflake, MongoDB ObjectId, Sqids, typed IDs
-- [Sortable, monotonic IDs](docs/README.md#sortable-monotonic-ids) — `orderedId()`
-- [Secure tokens (bearer secrets)](docs/README.md#secure-tokens-bearer-secrets) — `secureToken()`, `apiKey()`, `defineToken()`
-- [Choose the right ID](docs/README.md#choose-the-right-id) — decision table for common use cases
+- [API Reference](docs/README.md#api-reference): core functions, generators, utilities, [pre-built alphabets](docs/README.md#pre-built-alphabets)
+- [Additional ID formats](docs/README.md#additional-id-formats--helpers): UUID v4/v7, ULID, Snowflake, MongoDB ObjectId, Sqids, typed IDs
+- [Sortable, monotonic IDs](docs/README.md#sortable-monotonic-ids): `orderedId()`
+- [Secure tokens (bearer secrets)](docs/README.md#secure-tokens-bearer-secrets): `secureToken()`, `apiKey()`, `defineToken()`
+- [Choose the right ID](docs/README.md#choose-the-right-id): decision table for common use cases
 - [Security](docs/README.md#security) & [Security profiles](docs/README.md#security-profiles)
-- [Non-secure version](docs/README.md#non-secure-version) — `nope-id/non-secure`
-- [Real-world examples](docs/README.md#real-world-examples) — DB keys, API tokens, URL shortener, React, Express
+- [Security policy](SECURITY.md): how to report a vulnerability privately
+- [Non-secure version](docs/README.md#non-secure-version): `nope-id/non-secure`
+- [Real-world examples](docs/README.md#real-world-examples): DB keys, API tokens, URL shortener, React, Express
 - [Comparison with nanoid](docs/README.md#comparison-with-nanoid)
 - [Browser support](docs/README.md#browser-support)
 - [Testing](docs/README.md#testing)
@@ -131,17 +132,17 @@ The full documentation lives in [`docs/README.md`](docs/README.md) (also availab
 The core head-to-head vs the latest installed nanoid (auto-refreshed by CI on every PR):
 
 <!-- bench:meta:start -->
-_Last refreshed: 2026-09-22, Node v26.x, ubuntu-latest (GitHub Actions)._
+_Last refreshed: 2026-10-12, Node v26.x, ubuntu-latest (GitHub Actions)._
 <!-- bench:meta:end -->
 
 <!-- bench:comparison-table:start -->
-| Test | nanoid 6.0.1 | nope-id | Winner |
+| Test | nanoid 6.0.2 | nope-id | Winner |
 |------|--------|---------|--------|
-| Basic (21 chars) | ~26.7M ops/sec | **~55.7M ops/sec** | **nope-id ~2.1x** |
-| Small (10 chars) | ~35.3M ops/sec | **~51.5M ops/sec** | **nope-id ~1.5x** |
-| Large (64 chars) | ~10.8M ops/sec | **~32.9M ops/sec** | **nope-id ~3x** |
-| Custom Alphabet | ~32.4M ops/sec | **~67.2M ops/sec** | **nope-id ~2.1x** |
-| Batch (100 IDs) | ~258K ops/sec | **~759K ops/sec** | **nope-id ~2.9x** |
+| Basic (21 chars) | ~26.3M ops/sec | **~55.9M ops/sec** | **nope-id ~2.1x** |
+| Small (10 chars) | ~35.2M ops/sec | **~49.2M ops/sec** | **nope-id ~1.4x** |
+| Large (64 chars) | ~11.1M ops/sec | **~33.9M ops/sec** | **nope-id ~3.1x** |
+| Custom Alphabet | ~32.6M ops/sec | **~67.4M ops/sec** | **nope-id ~2.1x** |
+| Batch (100 IDs) | ~256K ops/sec | **~756K ops/sec** | **nope-id ~3x** |
 <!-- bench:comparison-table:end -->
 
 - [Full benchmark tables and methodology](docs/README.md#performance)

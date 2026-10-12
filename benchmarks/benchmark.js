@@ -33,7 +33,7 @@ import { v4 as lukeedUuid } from '@lukeed/uuid'
 import { generateId as sparkidGen } from 'sparkid'
 import { createRequire } from 'node:module'
 
-// Actual installed nanoid version — flows into meta so scripts/update-readme.js
+// Actual installed nanoid version; it flows into meta so scripts/update-readme.js
 // can label the comparison tables truthfully instead of hardcoding a version.
 const NANOID_VERSION = createRequire(import.meta.url)('nanoid/package.json').version
 
@@ -218,7 +218,7 @@ printResult(shortResult)
 printResult(isValidResult)
 
 // ============================================
-// 5b. New ID Types
+// 5b. Additional ID formats
 // ============================================
 log('\n\x1b[1m📊 New ID Types\x1b[0m\n')
 
@@ -341,11 +341,9 @@ printResult(orderedIdResult)
 printResult(sparkidVsOrdered)
 
 log('\n  \x1b[2morderedId and sparkid have the same output shape (21-char Base58, sortable,')
-log('  strictly monotonic). orderedId adds clock-rewind clamping, synthetic-time')
-log('  counter overflow (no busy-wait), and one extra char of per-call random')
-log('  entropy (8 vs sparkid\'s 7). Throughput is comparable within run-to-run')
-log('  noise on Node LTS — see benchmarks/orderedid-vs-sparkid.bench.js for the')
-log('  15-trial head-to-head harness this claim is based on.\x1b[0m')
+log('  strictly monotonic, clock rewinds clamped). orderedId keeps one more fresh')
+log('  random char per ID (8 vs sparkid\'s 7). These are same-process numbers;')
+log('  npm run benchmark:vs-sparkid measures the gap in fresh processes.\x1b[0m')
 
 // ============================================
 // Secure token throughput baseline
@@ -365,7 +363,7 @@ printResult(secureToken48)
 printResult(secureToken32)
 printResult(apiKeyResult)
 
-log('\n  \x1b[2mUnpooled by design — each call is its own CSPRNG fill + zeroize. Slower')
+log('\n  \x1b[2mUnpooled by design: each call is its own CSPRNG fill + zeroize. Slower')
 log('  than nopeid(), but a memory dump cannot leak tokens that were not yet issued.\x1b[0m')
 
 // ============================================

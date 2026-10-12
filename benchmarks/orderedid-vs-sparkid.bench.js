@@ -1,20 +1,18 @@
 // Honest head-to-head: nope-id vs sparkid, using MULTI-PROCESS isolation.
 //
-// The previous version of this file ran both libraries in the SAME process and
-// alternated between them. That is the failure mode CLAUDE.md Rule 2 warns
-// about: a shared V8 instance compiles both with mixed JIT feedback, so the
-// "winner" is mostly noise. This version measures each function in its OWN
-// fresh Node process (warmup + best-of-N inside that process) and reports a
-// Welch two-sample t-test across processes — the same method as
-// benchmarks/ab-multiproc.mjs.
+// Each function is measured in its OWN fresh Node process (warmup + best-of-N
+// inside that process) and the parent reports a Welch two-sample t-test across
+// processes, the same method as benchmarks/ab-multiproc.mjs. Running both
+// libraries in one process would let a shared V8 instance compile them with
+// mixed JIT feedback (CLAUDE.md Rule 2), so the "winner" would be mostly noise.
 //
 // It measures BOTH axes that matter:
 //   • per-call : orderedId()      vs sparkid generateId()
 //   • batch    : orderedId.many(100) vs a 100x generateId() loop  (per-ID rate)
 //
-// Honest expected result on Node 22: per-call is a statistical TIE (both pay one
-// Date.now() per ID, ~60-65% of latency), and orderedId.many() wins ~1.7x
-// because it amortizes Date.now() across the batch (sparkid has no batch API).
+// Both libraries pay one Date.now() per ID on the per-call path, the largest
+// part of its cost; orderedId.many() amortizes the clock read across the batch
+// (sparkid has no batch API). The verdict line is computed from the measurements.
 //
 //   node benchmarks/orderedid-vs-sparkid.bench.js
 
@@ -60,10 +58,10 @@ if (process.argv.includes('--child')) {
 
   const spawnOne = kind => new Promise((res, rej) => { const c = spawn(process.execPath, [SELF, '--child', `--kind=${kind}`], { stdio: ['ignore', 'pipe', 'inherit'] }); let o = ''; c.stdout.on('data', d => o += d); c.on('close', code => code ? rej(new Error('child ' + code)) : res(JSON.parse(o.trim()))) })
   // INTERLEAVE the two kinds (alternating which goes first each round) so any
-  // transient system load — thermal throttle, a background task — biases both
+  // transient system load (thermal throttle, a background task) biases both
   // equally over time. Measuring all of kind A then all of kind B would let a
-  // mid-run load shift masquerade as a difference, which matters most exactly
-  // when the true gap is ~0 (the per-call tie).
+  // mid-run load shift masquerade as a difference, which matters most when the
+  // true gap is small.
   const samplePair = async (ka, kb) => {
     const a = [], b = []
     for (let p = 0; p < PROCS; p++) {
@@ -75,15 +73,15 @@ if (process.argv.includes('--child')) {
 
   const fmt = n => Math.round(n).toLocaleString().padStart(13)
   console.log('\n' + '═'.repeat(72))
-  console.log(`  nope-id vs sparkid — multi-process (${PROCS} procs, best-of-${TRIALS})`)
+  console.log(`  nope-id vs sparkid: multi-process (${PROCS} procs, best-of-${TRIALS})`)
   console.log('═'.repeat(72))
 
   // per-call: ops/sec == IDs/sec (1 ID per op)
   const [oc, sc] = await samplePair('ordered-call', 'sparkid-call')
   const w1 = welch(oc, sc), r1 = mean(oc) / mean(sc)
-  // Tie band: the true per-call gap is < 2% (identical string-build cost, both
-  // pay one Date.now()), and the winner flips between runs. Only call a winner
-  // if the gap is both statistically significant AND materially >= 3%.
+  // Tie band: both pay one Date.now() per ID, so gaps under 3% are within the
+  // run-to-run spread of a loaded machine. Only call a winner if the gap is both
+  // statistically significant AND at least 3%.
   const tie1 = w1.p >= 0.05 || Math.abs(r1 - 1) < 0.03
   console.log('\n  PER-CALL  (IDs/sec)')
   console.log(`    orderedId()          ${fmt(mean(oc))}`)
@@ -98,9 +96,15 @@ if (process.argv.includes('--child')) {
   console.log(`    sparkid 100x loop    ${fmt(mean(sl) * 100)}`)
   console.log(`    ratio ${r2.toFixed(3)}x   p=${w2.p.toExponential(2)}   → ${w2.p < 0.05 && r2 > 1 ? `orderedId.many() ${r2.toFixed(2)}x FASTER (amortizes Date.now())` : 'no significant difference'}`)
 
+  const perCall = tie1
+    ? 'per call, a tie within noise'
+    : `per call, ${r1 > 1 ? 'orderedId()' : 'sparkid'} is ${Math.max(r1, 1 / r1).toFixed(2)}x faster`
+  const batch = w2.p < 0.05 && r2 > 1
+    ? `orderedId.many() is ${r2.toFixed(2)}x a sparkid loop`
+    : 'no significant batch difference'
   console.log('\n  ' + '─'.repeat(68))
-  console.log('  Honest verdict: per-call is a tie (both pay one Date.now() per ID);')
-  console.log('  nope-id wins the batch path via orderedId.many(), and ships 8 random')
-  console.log('  chars/ID (~46.9 bits) vs sparkid\'s 7 (~41 bits) at the same length.')
+  console.log(`  Verdict: ${perCall}; ${batch}.`)
+  console.log('  Entropy: orderedId keeps 8 fresh random chars per ID (~46.9 bits),')
+  console.log('  sparkid 7 (~41 bits), at the same 21-char length.')
   console.log('')
 }

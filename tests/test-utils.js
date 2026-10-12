@@ -67,27 +67,39 @@ export const assert = {
     }
   },
 
-  throws(fn, message = '') {
+  // `expected` is either a failure message (string) or, like node:assert, a
+  // RegExp the thrown error's message must match.
+  throws(fn, expected = '') {
     let threw = false
+    let error
     try {
       fn()
-    } catch {
+    } catch (e) {
       threw = true
+      error = e
     }
     if (!threw) {
-      throw new Error(message || 'Expected function to throw')
+      throw new Error(typeof expected === 'string' && expected ? expected : 'Expected function to throw')
+    }
+    if (expected instanceof RegExp && !expected.test(error?.message)) {
+      throw new Error(`Expected error matching ${expected}, got: ${error?.message}`)
     }
   },
 
-  async rejects(promise, message = '') {
+  async rejects(promise, expected = '') {
     let rejected = false
+    let error
     try {
       await promise
-    } catch {
+    } catch (e) {
       rejected = true
+      error = e
     }
     if (!rejected) {
-      throw new Error(message || 'Expected promise to reject')
+      throw new Error(typeof expected === 'string' && expected ? expected : 'Expected promise to reject')
+    }
+    if (expected instanceof RegExp && !expected.test(error?.message)) {
+      throw new Error(`Expected rejection matching ${expected}, got: ${error?.message}`)
     }
   },
 

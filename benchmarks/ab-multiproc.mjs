@@ -1,6 +1,6 @@
 // Multi-process A/B harness (CLAUDE.md Rule 2).
 //
-// Each variant is measured in its OWN fresh Node process — no shared V8
+// Each variant is measured in its OWN fresh Node process: no shared V8
 // instance, so the JIT compiles each variant with clean, unmixed feedback.
 // Each child does warmup + best-of-N inside its own process and reports a
 // single number (its best ops/sec). The parent spawns P children per variant,
@@ -52,7 +52,7 @@ async function runChild() {
     work = () => { sink += fn().length }
   }
 
-  // Warmup — push V8 to steady state for THIS process's single function.
+  // Warmup: push V8 to steady state for THIS process's single function.
   // Scale by batch size: a fixed batch-call count would warm up
   // (count * n) IDs and explode for large n, so target a fixed ~2M IDs.
   const warmupReps = op.startsWith('many')

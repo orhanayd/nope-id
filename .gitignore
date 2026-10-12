@@ -128,5 +128,16 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+# Local AI-assistant files: personal, never committed
 CLAUDE.md
+CLAUDE.local.md
+.claude/
+
+# Lockfiles: devDependencies exist only for benchmarking and consumers get
+# zero dependencies, so no package manager lockfile is committed
 package-lock.json
+yarn.lock
+pnpm-lock.yaml
+bun.lock
+bun.lockb

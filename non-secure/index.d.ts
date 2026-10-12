@@ -1,5 +1,5 @@
 /**
- * nope-id/non-secure — Math.random()-based build for non-security-sensitive
+ * nope-id/non-secure: Math.random()-based build for non-security-sensitive
  * IDs. Ships ONLY the 11 exports below; the secure-only formats (uuid, uuidv7,
  * ulid, orderedId, secureToken, snowflake, objectId, sqids, defineId, ...)
  * exist only in the main 'nope-id' entry. Signatures match the main entry,

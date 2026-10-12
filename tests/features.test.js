@@ -1,4 +1,5 @@
 // Extra Features Tests - prefixedId, sortableId, generateMany, slugId, shortId
+import { execFileSync } from 'node:child_process'
 import { test, describe, runTests, assert } from './test-utils.js'
 import {
   prefixedId,
@@ -449,8 +450,16 @@ describe('distributedId()', () => {
 
   test('throws on size below min (16)', () => {
     for (const arg of [0, -5, 3, 5, 15]) {
-      assert.throws(() => distributedId(arg), /must be an integer >= 16/)
+      assert.throws(() => distributedId(arg), /must be an integer between 16 and 65536/)
     }
+  })
+
+  test('throws above the 65536 cap instead of returning a constant id', () => {
+    // Without the cap, 2**32+5 would pass validation and wrap into an EMPTY random part
+    for (const arg of [65537, 2 ** 31, 2 ** 32 + 5]) {
+      assert.throws(() => distributedId(arg), /must be an integer between 16 and 65536/)
+    }
+    assert.equal(distributedId(65536).length, 65536)
   })
 
   test('throws on non-integer size', () => {
@@ -508,6 +517,44 @@ describe('sortableId() edge cases', () => {
   test('float size is truncated', () => {
     const id = sortableId(15.9)
     assert.equal(id.length, 15)
+  })
+
+  test('full-length, monotonic ids when Date.now() is mocked to 0 (all builds)', () => {
+    // A clock of 0 (sinon's fake-timer default) must not match the initial cache
+    // sentinels: a 0 sentinel would make sortableId return 1-char ids (an endless
+    // busy-wait in non-secure) and orderedId 9-char ids. Fresh module state is
+    // needed, so the check runs in a child process with the clock mocked first.
+    const builds = ['index.js', 'index.cjs', 'index.browser.js', 'non-secure/index.js', 'non-secure/index.cjs']
+      .map(f => new URL(`../${f}`, import.meta.url).href)
+    const script = `
+      Date.now = () => 0
+      const mono = a => a.every((x, i) => i === 0 || a[i - 1] < x)
+      const out = []
+      for (const url of ${JSON.stringify(builds)}) {
+        const m = await import(url)
+        const sortable = [m.sortableId(), m.sortableId(), m.sortableId()]
+        const ordered = m.orderedId ? [m.orderedId(), m.orderedId(), ...m.orderedId.many(3)] : []
+        out.push({ url, sortable: sortable.map(s => s.length), ordered: ordered.map(s => s.length),
+          monotonic: mono(sortable) && mono(ordered) })
+      }
+      process.stdout.write(JSON.stringify(out))`
+    const results = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script],
+      { encoding: 'utf8', timeout: 10000 }))
+    for (const r of results) {
+      assert.deepEqual(r.sortable, [22, 22, 22], r.url)
+      if (r.ordered.length) assert.deepEqual(r.ordered, [21, 21, 21, 21, 21], r.url)
+      assert.ok(r.monotonic, `${r.url} must stay monotonic`)
+    }
+  })
+
+  test('size is coerced with |0 like nopeid (no hang, no internal errors)', () => {
+    // Without |0, 2**32+5 would build a 4-billion-char tail and Infinity would leak a Buffer RangeError
+    assert.equal(sortableId(2 ** 32 + 5).length, 5)
+    assert.equal(sortableId(Infinity), '')
+    assert.equal(sortableId(NaN), '')
+    assert.equal(sortableId(2 ** 31), '')
+    assert.equal(sortableId('30').length, 30)
+    assert.match(sortableId(), /^[0-9A-HJKMNP-TV-Z]{22}$/)
   })
 })
 

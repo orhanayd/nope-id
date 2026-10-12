@@ -83,7 +83,7 @@ describe('collisionProbability()', () => {
 
   test('totalPossible is correct for 21 chars with 64 alphabet', () => {
     const result = collisionProbability(21, 64)
-    // 64^21 = 4.7e37 approximately - use BigInt for comparison
+    // 64^21 ≈ 8.5e37 - use BigInt for comparison
     assert.ok(result.totalPossibleBigInt > BigInt('10000000000000000000000000000000000000'))
   })
 

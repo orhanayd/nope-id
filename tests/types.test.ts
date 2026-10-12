@@ -97,7 +97,7 @@ const yrs: number = stats.yearsFor1Percent
 const asyncId: Promise<string> = nopeidAsync()
 const asyncId10: Promise<string> = nopeidAsync(10)
 
-// === New ID formats ===
+// === Additional ID formats ===
 const v4: string = uuid()
 const v7: string = uuidv7()
 const ul: string = ulid()

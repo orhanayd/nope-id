@@ -1,7 +1,7 @@
 // scripts/update-readme.js
 // Refresh the slim root README.md (headline + meta + comparison-table regions)
-// and the full docs READMEs — docs/README.md, docs/README.tr.md,
-// docs/README.ru.md (all regions) — from a benchmark JSON file.
+// and the full docs READMEs (docs/README.md, docs/README.tr.md and
+// docs/README.ru.md, all regions) from a benchmark JSON file.
 // Usage: node scripts/update-readme.js <bench.json>
 //
 // Each auto-managed region in a README is bracketed by HTML comment markers:
@@ -38,8 +38,8 @@ for (const k of reqComparison) {
   if (!bench.comparison[k]) throw new Error(`bench.json missing comparison.${k}`)
 }
 // The comparison tables label the competitor with its real installed version
-// (benchmark.js emits it) — a stale bench.json must fail loudly, not print
-// a wrong or undefined version into three READMEs.
+// (benchmark.js emits it); a stale bench.json must fail loudly, not print
+// a wrong or undefined version into the READMEs.
 if (!bench.meta.nanoidVersion) throw new Error('bench.json missing meta.nanoidVersion')
 const nanoidLabel = `nanoid ${bench.meta.nanoidVersion}`
 
@@ -291,14 +291,14 @@ const refresh = (filePath, loc, markers) => {
   // Per-target region scoping: when a target lists `markers`, only those
   // regions are refreshed in that file (the others are not expected there).
   // A LISTED region whose marker pair is missing still throws inside
-  // mkReplace — the loud-failure contract is unchanged, just scoped.
+  // mkReplace: the loud-failure contract holds, scoped per target.
   const replaceRegion = markers
     ? (name, body, opts) => { if (markers.includes(name)) replaceAll(name, body, opts) }
     : replaceAll
 
   // === Headline range (e.g. "5x to 8x") ===
   // Build "Nx to Mx" from the spread of comparison ratios. Honesty policy
-  // (CHANGELOG 1.4.0 "Benchmarks policy"): never clamp or round a bound UP —
+  // (docs/README.md "Benchmarks policy"): never clamp or round a bound UP;
   // a sub-1.75x floor is shown with one decimal ("~1.6x"), not inflated to
   // "2x". The wins count is computed from the data, so "wins all 5" can never
   // outlive a row that nanoid actually wins.
