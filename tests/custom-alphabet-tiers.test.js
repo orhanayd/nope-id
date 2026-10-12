@@ -1,8 +1,8 @@
 // customAlphabet / customRandom tier tests.
-// The factory picks a refill strategy by alphabet shape (hex-native, pow-2
-// bulk translate, non-pow-2 bulk rejection). These tests pin the external
-// contract for a representative alphabet of each tier: exact charset, length,
-// near-uniform frequency, and correctness across refill boundaries.
+// The factory picks a refill strategy by alphabet shape (native hex/base64 char
+// sets, pow-2 bulk translate, non-pow-2 bulk rejection). These tests pin the
+// external contract for a representative alphabet of each tier: exact charset,
+// length, near-uniform frequency, and correctness across refill boundaries.
 import { test, describe, runTests, assert } from './test-utils.js'
 import { customAlphabet, customRandom, alphabets, urlAlphabet, random } from '../index.js'
 
@@ -37,9 +37,23 @@ const checkTier = (name, alphabet, size, poolChars) => {
   })
 }
 
-describe('customAlphabet tier 1 (native hex)', () => {
+const BASE64_STD = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+
+describe('customAlphabet tier 1 (native hex / base64 char sets, any order)', () => {
   checkTier('hexLower', alphabets.hexLower, 16, 65536)
   checkTier('hexUpper', alphabets.hexUpper, 16, 65536)
+  checkTier('reordered hex', 'fedcba9876543210', 16, 65536)
+  checkTier('urlAlphabet (base64url set)', urlAlphabet, 21, 65536)
+  checkTier('filename (base64url set)', alphabets.filename, 21, 65536)
+  checkTier('standard base64 set', BASE64_STD, 21, 65536)
+
+  test('base64-set cold path (size > pool): exact length and charset', () => {
+    for (const alphabet of [alphabets.filename, BASE64_STD]) {
+      const big = customAlphabet(alphabet, 21)(70001)
+      assert.equal(big.length, 70001)
+      assert.ok([...big].every(c => alphabet.includes(c)), 'every char from the alphabet')
+    }
+  })
 
   test('hexLower matches strict format regexes', () => {
     const gen = customAlphabet(alphabets.hexLower, 32)
@@ -66,7 +80,8 @@ describe('customAlphabet tier 1 (native hex)', () => {
 describe('customAlphabet tier 2 (power-of-2 bulk translate)', () => {
   checkTier('binary (len 2)', alphabets.binary, 32, 32768)
   checkTier('base32 (len 32)', alphabets.base32, 20, 32768)
-  checkTier('urlAlphabet (len 64)', urlAlphabet, 21, 32768)
+  // 64 chars but not a base64/base64url set, so it stays on the translate tier
+  checkTier('alphanumeric + .~ (len 64)', alphabets.alphanumeric + '.~', 21, 32768)
 
   test('pow-2 cold path (size > pool): exact length and charset', () => {
     const gen = customAlphabet(alphabets.base32, 20)
@@ -174,6 +189,22 @@ describe('customRandom bulk chunking contract', () => {
       const gen = customRandom('abcd', 16, () => new Uint8Array(1))
       gen(40000)
     })
+  })
+
+  test('cold path keeps every request <= 65536 bytes (pow-2 and non-pow-2)', () => {
+    // A getRandom wrapping crypto.getRandomValues throws QuotaExceededError above
+    // 64 KiB, so the cold paths must split big sizes into <= 65536-byte requests.
+    for (const [alphabet, re] of [['abcd', /^[a-d]+$/], ['abc', /^[a-c]+$/]]) {
+      const requested = []
+      const gen = customRandom(alphabet, 16, bytes => {
+        requested.push(bytes)
+        return crypto.getRandomValues(new Uint8Array(bytes))
+      })
+      const id = gen(100000)
+      assert.equal(id.length, 100000)
+      assert.match(id, re)
+      for (const bytes of requested) assert.between(bytes, 1, 65536)
+    }
   })
 })
 

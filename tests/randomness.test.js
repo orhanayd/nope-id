@@ -2,7 +2,7 @@
 // Tests entropy quality, distribution uniformity, and statistical randomness
 
 import { nopeid, customAlphabet, random } from '../index.js'
-import { nanoid, customAlphabet as nanoidCustomAlphabet } from 'nanoid'
+import { nanoid, customAlphabet as nanoidCustomAlphabet, random as nanoidRandom } from 'nanoid'
 
 const SAMPLE_SIZE = 100000
 const ID_LENGTH = 21
@@ -205,12 +205,7 @@ console.log(`   nanoid:  ${uniqNanoid.unique.toLocaleString()}/${uniqNanoid.tota
 // Test 3: Bit Distribution
 console.log('\n🔬 Running Bit Distribution Test...')
 const bitNopeid = bitDistributionTest('nope-id', random, 1000)
-// nanoid doesn't export random, so we skip or use crypto directly
-const bitNanoid = bitDistributionTest('nanoid (crypto)', (n) => {
-  const arr = new Uint8Array(n)
-  crypto.getRandomValues(arr)
-  return arr
-}, 1000)
+const bitNanoid = bitDistributionTest('nanoid', nanoidRandom, 1000)
 results.push(runTest('Bit Distribution Test', bitNopeid, bitNanoid))
 console.log(`   nope-id: ${(bitNopeid.zeroRatio * 100).toFixed(2)}% zeros / ${(bitNopeid.oneRatio * 100).toFixed(2)}% ones ${bitNopeid.passed ? '✅' : '❌'}`)
 console.log(`   nanoid:  ${(bitNanoid.zeroRatio * 100).toFixed(2)}% zeros / ${(bitNanoid.oneRatio * 100).toFixed(2)}% ones ${bitNanoid.passed ? '✅' : '❌'}`)

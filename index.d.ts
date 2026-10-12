@@ -23,9 +23,9 @@ export const alphabets: {
   hexLower: string
   /** 0-9, A-F (16 characters) */
   hexUpper: string
-  /** Similar looking characters removed (49 characters) */
+  /** Similar looking characters removed (48 characters) */
   nolookalikes: string
-  /** Even safer version with more removals (34 characters) */
+  /** Even safer version with more removals (36 characters) */
   nolookalikesSafe: string
   /** 0-1 (2 characters) */
   binary: string
@@ -50,10 +50,12 @@ export function random(bytes: number): Uint8Array
 
 /**
  * Create a custom ID generator with specific alphabet
- * @param alphabet - Custom alphabet string (1-256 characters)
+ * @param alphabet - Custom alphabet: 1-256 unique Latin-1 characters (U+0000-U+00FF).
+ *   The non-secure build (`nope-id/non-secure`) also accepts characters beyond Latin-1.
  * @param defaultSize - Default ID size (default: 21)
  * @returns Function that generates IDs
- * @throws Error if alphabet is empty or longer than 256 characters
+ * @throws Error if alphabet is not a string, is empty, is longer than 256 characters,
+ *   contains duplicate characters, or contains characters beyond Latin-1
  */
 export function customAlphabet(
   alphabet: string,
@@ -62,11 +64,15 @@ export function customAlphabet(
 
 /**
  * Create a custom ID generator with custom random function
- * @param alphabet - Custom alphabet string
+ * @param alphabet - Custom alphabet (same rules as {@link customAlphabet})
  * @param defaultSize - Default ID size
- * @param getRandom - Custom random function
- * @returns Function that generates IDs
- * @throws Error if alphabet is empty
+ * @param getRandom - Custom random function: receives a byte count (at most 65536)
+ *   and must return at least that many bytes
+ * @returns Function that generates IDs. It throws if getRandom returns fewer bytes
+ *   than requested, or a whole batch with no byte usable for the alphabet.
+ *   Seeded output is reproducible within one version only: the byte-to-character
+ *   mapping may change between releases.
+ * @throws Error if the alphabet is invalid (see {@link customAlphabet})
  */
 export function customRandom(
   alphabet: string,
@@ -103,11 +109,11 @@ export function prefixedId(
  * Sizes > 22 are padded with extra Crockford Base32 random chars; sizes < 22 are
  * truncated to the timestamp prefix, which weakens the same-millisecond monotonic /
  * uniqueness guarantee, so use size >= 22 when you rely on monotonicity.
- * @deprecated Prefer {@link orderedId} — fixed 21-char Base58, strictly monotonic,
+ * @deprecated Prefer {@link orderedId}: fixed 21-char Base58, strictly monotonic,
  *             with explicit counter overflow handling. sortableId() is kept for
  *             backward compatibility.
- * @param size - Total ID length (default: 22)
- * @returns Sortable ID string (chronologically sortable)
+ * @param size - Total ID length (default: 22), coerced to an integer like {@link nopeid}
+ * @returns Sortable ID string (chronologically sortable; empty string if size <= 0)
  */
 export function sortableId(size?: number): string
 
@@ -202,11 +208,11 @@ export function getFingerprint(): string
 /**
  * Generate an ID with a process-fingerprint prefix. Useful for tracing the
  * origin of an ID in multi-process / multi-node systems. Collision resistance
- * comes from the random tail — `size` must leave room for it.
+ * comes from the random tail, so `size` must leave room for it.
  * Format: `fingerprint_randomPart`
- * @param size - Total ID length (default: 25; minimum: 16)
+ * @param size - Total ID length (default: 25; minimum: 16; maximum: 65536)
  * @returns ID string of the form `<fingerprint>_<random>`
- * @throws Error if size is not an integer >= 16
+ * @throws Error if size is not an integer in [16, 65536]
  */
 export function distributedId(size?: number): string
 
@@ -242,7 +248,7 @@ export function monotonicFactory(): (seedTime?: number) => string
 export interface SnowflakeOptions {
   /** 10-bit node/machine id (0-1023, default 0) */
   nodeId?: number
-  /** Custom epoch in ms (default: Twitter epoch 1288834974657) */
+  /** Custom epoch in ms: a non-negative safe integer (default: Twitter epoch 1288834974657) */
   epoch?: number | bigint
 }
 
@@ -257,9 +263,10 @@ export interface SnowflakeParts {
  * Create a Snowflake ID generator (distributed 64-bit id, returned as a string).
  * Layout: 41-bit timestamp | 10-bit nodeId | 12-bit sequence.
  * Each factory owns its own sequence/timestamp state (coordination-free per node).
- * @returns A function that returns the next snowflake id as a string
- * @throws Error if nodeId is not an integer in [0, 1023], or epoch cannot be
- *   converted to a BigInt
+ * @returns A function that returns the next snowflake id as a string; it throws
+ *   'Snowflake clock is before the epoch' rather than emit a negative id
+ * @throws Error if nodeId is not an integer in [0, 1023], or epoch is not a
+ *   non-negative safe integer (number, bigint or numeric string)
  */
 export function snowflakeFactory(options?: SnowflakeOptions): () => string
 
@@ -271,7 +278,7 @@ export function snowflake(): string
 
 /**
  * Decode a snowflake id into its components.
- * @param id - Snowflake id: digit string (recommended — 64-bit ids exceed
+ * @param id - Snowflake id: digit string (recommended: 64-bit ids exceed
  *   Number.MAX_SAFE_INTEGER), bigint, or safe non-negative integer
  * @param epoch - Epoch used at generation (default: Twitter epoch)
  * @throws Error ('Invalid Snowflake ID' / 'Invalid snowflake epoch') on malformed input
@@ -294,9 +301,9 @@ export function decodeObjectIdTime(id: string): Date
 
 /** Options for {@link sqidsFactory} */
 export interface SqidsOptions {
-  /** Custom alphabet (>= 3 unique characters) */
+  /** Custom alphabet (string of >= 3 unique characters) */
   alphabet?: string
-  /** Minimum output length (default 0) */
+  /** Minimum output length: integer 0-255 (default 0) */
   minLength?: number
   /** Words to avoid in generated ids (default: none) */
   blocklist?: string[]
@@ -313,12 +320,14 @@ export interface Sqids {
 /**
  * Create a Sqids encoder/decoder for reversible integer <-> short-string mapping.
  * Obfuscation only - NOT encryption.
+ * @throws Error if alphabet is not a string of >= 3 unique characters, or minLength
+ *   is not an integer in [0, 255]
  */
 export function sqidsFactory(options?: SqidsOptions): Sqids
 
 /** Options for {@link defineId} */
 export interface DefineIdOptions {
-  /** Random part length (default 21) */
+  /** Random part length (default 21, max 65536) */
   size?: number
   /** Separator between prefix and random part (default '_') */
   separator?: string
@@ -340,6 +349,8 @@ export interface TypedId<P extends string> {
  * Define a typed prefixed-id helper (Stripe-style), e.g. `defineId('user')`.
  * The template-literal return type gives compile-time safety on generated ids.
  * @param prefix - The id prefix (e.g. 'user', 'order')
+ * @throws Error if prefix is not a string, size is not an integer in [1, 65536],
+ *   or alphabet is invalid (see {@link customAlphabet})
  */
 export function defineId<P extends string>(prefix: P, options?: DefineIdOptions): TypedId<P>
 
@@ -361,7 +372,7 @@ export function isValidULID(id: string): boolean
  * alphabet, bias-free CSPRNG). Unlike {@link nopeid}, secureToken() does not
  * cache or pre-generate future tokens; each call allocates its own local buffer,
  * fills it from CSPRNG, maps to the alphabet, and zeros the raw bytes before
- * returning. The returned JavaScript string itself cannot be zeroized — store
+ * returning. The returned JavaScript string itself cannot be zeroized; store
  * HASHED tokens (e.g. SHA-256) in your database, never the raw token.
  * @param size - Token length in characters (default 48, min 32, max 65536)
  * @throws Error if size is not an integer in [32, 65536]
@@ -412,14 +423,14 @@ export interface OrderedIdParts {
   random: string
 }
 
-/** orderedId() — fixed 21-char Base58, sortable, strictly monotonic */
+/** orderedId(): fixed 21-char Base58, sortable, strictly monotonic */
 export interface OrderedId {
   /** Generate a 21-char Base58 ID. Strictly monotonic; safe across clock rewinds. */
   (): string
   /**
-   * 21-byte ASCII representation of a fresh orderedId() — Base58 char codes in
+   * 21-byte ASCII representation of a fresh orderedId(): Base58 char codes in
    * latin1, one byte per character. NOT a packed binary form (Base58 does not
-   * pack cleanly into bytes); a compact toBytes/fromBytes pair is planned for v2.1.
+   * pack cleanly into bytes).
    */
   asciiBytes(): Uint8Array
   /** Parse a 21-char orderedId into its components. Throws on invalid input. */
@@ -440,7 +451,7 @@ export interface OrderedId {
  * Lexicographic sort matches creation order. Clock rewinds are clamped; counter
  * overflow bumps the synthetic clock forward by 1 ms with no busy-wait.
  *
- * Not a bearer secret — the timestamp prefix reveals creation time. For secrets
+ * Not a bearer secret: the timestamp prefix reveals creation time. For secrets
  * use {@link secureToken} or {@link apiKey}.
  */
 export const orderedId: OrderedId

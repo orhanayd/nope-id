@@ -5,10 +5,12 @@
 //
 // Run with: npm run test:browser
 
+import { execFileSync } from 'node:child_process'
 import { describe, test, assert, runTests } from './test-utils.js'
 import {
   nopeid,
   customAlphabet,
+  customRandom,
   random,
   prefixedId,
   sortableId,
@@ -65,6 +67,72 @@ describe('Browser bundle: customAlphabet()', () => {
 
   test('throws on empty alphabet', () => {
     assert.throws(() => customAlphabet('', 10))
+  })
+
+  test('Latin-1 alphabets with U+0080-U+009F stay exact (TextDecoder latin1 is windows-1252)', () => {
+    // windows-1252 decodes 0x80 as '€' (U+20AC): a 'latin1' decoder would remap these chars
+    const alphabet = Array.from({ length: 40 }, (_, i) => String.fromCharCode(0x80 + i)).join('')
+    const pow2 = alphabet.slice(0, 32)
+    for (const [chars, gen] of [
+      [alphabet, customAlphabet(alphabet, 64)],
+      [pow2, customAlphabet(pow2, 64)],
+      [alphabet, customRandom(alphabet, 64, size => crypto.getRandomValues(new Uint8Array(size)))],
+    ]) {
+      for (const id of [gen(), gen(40000)]) {
+        assert.ok([...id].every(c => chars.includes(c)), 'every char must come from the alphabet')
+        assert.ok(isValid(id, chars))
+      }
+    }
+  })
+})
+
+describe('Browser bundle: ES2026 native encoders (toBase64 / toHex)', () => {
+  test('nopeid and hex/base64-set customAlphabet use them, with correct uniform output', () => {
+    // Node 22 has no Uint8Array.prototype.toBase64/toHex, so a child process
+    // polyfills them with Buffer BEFORE the bundle loads (feature detection runs
+    // at import) and counts calls to prove the native paths are really taken.
+    const url = new URL('../index.browser.js', import.meta.url).href
+    const script = `
+      let calls = 0
+      Uint8Array.prototype.toBase64 = function (opts = {}) {
+        calls++
+        const s = Buffer.from(this.buffer, this.byteOffset, this.length)
+          .toString(opts.alphabet === 'base64url' ? 'base64url' : 'base64')
+        return opts.omitPadding ? s.replace(/=+$/, '') : s
+      }
+      Uint8Array.prototype.toHex = function () {
+        calls++
+        return Buffer.from(this.buffer, this.byteOffset, this.length).toString('hex')
+      }
+      const b = await import(${JSON.stringify(url)})
+      const base64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+      const out = {}
+      for (const [name, alphabet, gen] of [
+        ['nopeid', b.urlAlphabet, n => b.nopeid(n)],
+        ['hexLower', b.alphabets.hexLower, b.customAlphabet(b.alphabets.hexLower, 21)],
+        ['hexUpper', b.alphabets.hexUpper, b.customAlphabet(b.alphabets.hexUpper, 21)],
+        ['filename', b.alphabets.filename, b.customAlphabet(b.alphabets.filename, 21)],
+        ['base64', base64, b.customAlphabet(base64, 21)],
+      ]) {
+        const before = calls
+        let s = ''
+        for (let i = 0; i < 4000; i++) s += gen(21)
+        s += gen(70000) // cold path
+        const counts = new Map()
+        for (const ch of s) counts.set(ch, (counts.get(ch) || 0) + 1)
+        const expected = s.length / alphabet.length
+        let chi = 0
+        for (const ch of alphabet) chi += ((counts.get(ch) || 0) - expected) ** 2 / expected
+        out[name] = { native: calls > before, foreign: [...counts.keys()].filter(c => !alphabet.includes(c)).length,
+          z: (chi - (alphabet.length - 1)) / Math.sqrt(2 * (alphabet.length - 1)) }
+      }
+      process.stdout.write(JSON.stringify(out))`
+    const results = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' }))
+    for (const [name, r] of Object.entries(results)) {
+      assert.ok(r.native, `${name} must use the native encoder`)
+      assert.equal(r.foreign, 0, `${name} emitted chars outside its alphabet`)
+      assert.between(r.z, -6, 6, `${name} distribution`)
+    }
   })
 })
 

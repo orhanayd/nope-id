@@ -10,12 +10,12 @@ A tiny, secure, URL-friendly unique string ID generator for JavaScript.
 - **Faster** - 1.4x to 3x faster than nanoid (CSPRNG, full URL-safe alphabet); wins all 5 core benchmarks ([see benchmarks](#performance))
 <!-- bench:headline:end -->
 - **Security Hardened** - Reduced timing-leak validators, modulo bias elimination, prototype pollution protection ([see security](#security))
-- **Well Tested** - 408 tests including security & entropy tests ([see testing](#testing))
-- **Cryptographically Secure** - Uses `webcrypto.getRandomValues()` (CSPRNG)
+- **Well Tested** - 429 tests including security & entropy tests ([see testing](#testing))
+- **Cryptographically Secure** - Uses the platform CSPRNG (`crypto.randomFillSync()` in Node.js, `crypto.getRandomValues()` in browsers)
 - **Zero Dependencies** - No external dependencies
 - **URL-safe** - Uses `A-Za-z0-9_-` characters
 - **Dual Module** - Works with both ESM (`import`) and CommonJS (`require`)
-- **TypeScript** - Full type definitions included
+- **TypeScript** - Full type definitions for both `import` and `require`
 - **Collision-resistant** - Strictly-monotonic sortable IDs, origin-tagged distributed IDs
 - **Many ID Formats** - UUID v4 & **v7**, **ULID** (spec-compliant + monotonic factory), **Snowflake**, **MongoDB ObjectId**
 - **Extra Features** - Prefixed IDs, sortable IDs, **Sqids** (reversible encoding), **typed IDs**, format validators, and more!
@@ -111,6 +111,8 @@ const hexGen = customAlphabet('0123456789abcdef', 16)
 const id = hexGen() // "4f90d13a42f17f80"
 ```
 
+> **Alphabet rules:** 1 to 256 unique characters from Latin-1 (U+0000 to U+00FF); anything else throws. An alphabet with exactly the hex, base64url or base64 character set (in any order) takes a fully native fast path. `nope-id/non-secure` also accepts characters beyond Latin-1, such as Cyrillic.
+
 #### `customRandom(alphabet, defaultSize, getRandom)`
 
 Creates a custom ID generator with your own random function.
@@ -130,6 +132,8 @@ customGen() // Deterministic output
 // CommonJS
 const { customRandom } = require('nope-id')
 ```
+
+> `getRandom(bytes)` is asked for at most 65536 bytes per call (safe to wrap `crypto.getRandomValues`) and must return at least that many. A generator that never yields a byte usable for the alphabet throws instead of looping forever. Seeded output is reproducible within one version only: the byte-to-character mapping may change between releases.
 
 #### `random(bytes)`
 
@@ -194,7 +198,7 @@ import { sortableId, decodeTime } from 'nope-id'
 
 const id1 = sortableId() // "01HGW2BBK0QZRMTX12345A"
 // wait some time...
-const id2 = sortableId() // "01HGW2BBK1ABCDEFGHIJKL"
+const id2 = sortableId() // "01HGW2BBK1ABCDEFGHJKMN"
 
 // Chronologically sortable
 console.log(id1 < id2) // true
@@ -325,9 +329,9 @@ Generates a short ID without similar-looking characters (no 0/O, 1/l/I). Perfect
 // ES Modules
 import { shortId } from 'nope-id'
 
-shortId()   // "aBc7XyZ9"
+shortId()   // "aBc7XyW9"
 shortId(6)  // "Kp3Wn8"
-shortId(10) // "aBc7XyZ9Kp"
+shortId(10) // "aBc7XyW9Kp"
 
 // Perfect for:
 // - Verification codes
@@ -336,7 +340,7 @@ shortId(10) // "aBc7XyZ9Kp"
 // - Ticket numbers
 
 const verificationCode = shortId(6) // "Kp3Wn8"
-const ticketNumber = shortId(8)     // "aBc7XyZ9"
+const ticketNumber = shortId(8)     // "aBc7XyW9"
 
 // CommonJS
 const { shortId } = require('nope-id')
@@ -391,7 +395,7 @@ const fingerprint = getFingerprint()
 
 #### `distributedId(size = 25)`
 
-Generates an ID with a process-fingerprint prefix. Useful for tracing ID origin in multi-process or multi-node systems. Collision resistance comes from the random tail, so `size` must leave room for it (minimum 16; smaller values throw).
+Generates an ID with a process-fingerprint prefix. Useful for tracing ID origin in multi-process or multi-node systems. Collision resistance comes from the random tail, so `size` must leave room for it (16 to 65536; other values throw).
 
 **Format:** `fingerprint_randomPart`
 
@@ -399,14 +403,14 @@ Generates an ID with a process-fingerprint prefix. Useful for tracing ID origin 
 // ES Modules
 import { distributedId, getFingerprint } from 'nope-id'
 
-distributedId()   // "aB3x_V1StGXR8_Z5jdHi6B" (25 chars)
-distributedId(30) // "aB3x_V1StGXR8_Z5jdHi6B-myT1" (30 chars)
-distributedId(8)  // throws — size must be >= 16
+distributedId()   // "aB3x_V1StGXR8_Z5jdHi6B-my" (25 chars)
+distributedId(30) // "aB3x_V1StGXR8_Z5jdHi6B-myTxK9q" (30 chars)
+distributedId(8)  // throws: size must be between 16 and 65536
 
 // In multi-process / multi-node systems, each origin's IDs carry its fingerprint
-// Node 1: "aB3x_V1StGXR8_Z5jdHi6B"
-// Node 2: "kL9m_IRFa-VaY2bKwxyz12"
-// Node 3: "pQ7r_Z5jdHi6B-myTV1St8"
+// Node 1: "aB3x_V1StGXR8_Z5jdHi6B-my"
+// Node 2: "kL9m_IRFa-VaY2bKwxyz12aBc"
+// Node 3: "pQ7r_Z5jdHi6B-myTV1St8Qw3"
 
 // Identify which origin generated an ID
 const id = distributedId()
@@ -491,8 +495,8 @@ alphabets.uppercase       // "A-Z" (26 chars)
 alphabets.numbers         // "0-9" (10 chars)
 alphabets.hexLower        // "0-9a-f" (16 chars)
 alphabets.hexUpper        // "0-9A-F" (16 chars)
-alphabets.nolookalikes    // No confusing chars (49 chars)
-alphabets.nolookalikesSafe // Extra safe version (34 chars)
+alphabets.nolookalikes    // No confusing chars (48 chars)
+alphabets.nolookalikesSafe // Extra safe version (36 chars)
 alphabets.binary          // "01" (2 chars)
 alphabets.octal           // "0-7" (8 chars)
 alphabets.base32          // RFC 4648 Base32 (32 chars)
@@ -546,7 +550,7 @@ const next = monotonicFactory()
 next() < next()     // true (same ms, strictly increasing)
 ```
 
-`seedTime` must be an integer in `[0, 281474976710655]` (the 48-bit ULID spec maximum); anything else (NaN, negatives, fractions, dates) throws instead of producing a corrupt ULID.
+`seedTime` must be an integer in `[0, 281474976710655]` (the 48-bit ULID spec maximum); anything else (NaN, negatives, fractions, `Date` objects) throws.
 
 ### `snowflakeFactory(options)`, `snowflake()` & `decodeSnowflake(id)`
 
@@ -562,7 +566,7 @@ decodeSnowflake(id)  // { timestamp: Date, nodeId: 1, sequence: 0 }
 snowflake()  // default single-node generator (node id derived from fingerprint)
 ```
 
-`nodeId` must be an integer 0-1023 (out-of-range values throw instead of being silently masked, which could collide two differently-configured nodes). Malformed ids or epochs throw `Invalid Snowflake ID` / `Invalid snowflake epoch`.
+`nodeId` must be an integer from 0 to 1023, otherwise it throws. `epoch` (default `1288834974657`, the Twitter epoch) must be a non-negative safe integer in milliseconds, and a clock reading earlier than the epoch throws `Snowflake clock is before the epoch`. Malformed ids or epochs throw `Invalid Snowflake ID` / `Invalid snowflake epoch`.
 
 ### `objectId()` & `decodeObjectIdTime(id)`
 
@@ -582,7 +586,7 @@ Encode arrays of non-negative integers into short, URL-safe, **reversible** stri
 ```javascript
 import { sqidsFactory } from 'nope-id'
 
-const sqids = sqidsFactory()        // { alphabet?, minLength?, blocklist? }
+const sqids = sqidsFactory()        // { alphabet? (3+ unique chars), minLength? (0-255), blocklist? }
 const id = sqids.encode([1, 2, 3])  // "86Rf07"
 sqids.decode(id)                    // [1, 2, 3]
 ```
@@ -596,10 +600,11 @@ Stripe-style typed IDs with a generator, a type guard, and a parser. In TypeScri
 ```typescript
 import { defineId } from 'nope-id'
 
-const UserId = defineId('user')   // { size?, separator?, alphabet? }
+const UserId = defineId('user')   // { size? (1-65536), separator?, alphabet? }
 const id = UserId.generate()      // type: `user_${string}`
 UserId.is(id)                     // true (type guard narrows the type)
-UserId.parse('user_abc')          // { prefix: 'user', id: 'abc' }  (or null)
+UserId.parse(id)                  // { prefix: 'user', id: '<21 chars>' }
+UserId.parse('user_abc')          // null (wrong length)
 ```
 
 ### `isValidUUID(id, version?)` & `isValidULID(id)`
@@ -607,7 +612,7 @@ UserId.parse('user_abc')          // { prefix: 'user', id: 'abc' }  (or null)
 Format validators for UUID and ULID strings.
 
 ```javascript
-import { isValidUUID, isValidULID } from 'nope-id'
+import { isValidUUID, isValidULID, uuidv7 } from 'nope-id'
 
 isValidUUID('110ec58a-a0f2-4ac4-8393-c866d813b8d1')  // true
 isValidUUID(uuidv7(), 7)                              // true (version-pinned)
@@ -624,7 +629,7 @@ isValidULID('01ARZ3NDEKTSV4RRFFQ69G5FAV')             // true
 
 A fixed-format, strictly-monotonic, lexicographically-sortable 21-char Base58 ID. Layout: 8 timestamp + 5 counter + 8 random.
 
-Same shape as [sparkid](https://www.npmjs.com/package/sparkid), with one extra char of random entropy (~47 bits vs sparkid's ~41), stronger invariants (clock-rewind clamp, synthetic-time counter overflow instead of busy-wait), and comparable throughput within run-to-run noise on Node LTS (see [Benchmarks](#benchmarks)).
+Same 21-char Base58 shape as [sparkid](https://www.npmjs.com/package/sparkid), with the same clock-rewind clamp and time bump on counter overflow, plus one more fresh random char per ID (8 chars, ~47 bits, against sparkid's 7, ~41 bits). On Node 22 it measures about 1.1x `sparkid` per call, and `orderedId.many()` about 2.2x a `sparkid` loop (multi-process Welch t-test, `benchmarks/orderedid-vs-sparkid.bench.js`).
 
 ```javascript
 import { orderedId } from 'nope-id'
@@ -638,7 +643,7 @@ orderedId() < orderedId() // true
 
 // Parse the time, counter, and random tail back out
 orderedId.parse('1okw67hF111114mDXU1ez')
-// { timestamp: Date, counter: 1, random: '4mDXU1ez' }
+// { timestamp: Date, counter: 0, random: '4mDXU1ez' }
 
 // 21-byte ASCII representation (latin1 char codes; NOT packed binary)
 orderedId.asciiBytes() // Uint8Array(21)
@@ -651,21 +656,21 @@ orderedId.many(1000) // string[] of 1000 sortable IDs
 **When to choose `orderedId()` over `sortableId()`:**
 - It is strictly monotonic (`b > a`), not just non-decreasing.
 - Counter overflow does a synthetic time bump instead of a busy-wait loop.
-- Clock rewind is clamped — never emits a smaller timestamp than what it already returned.
+- Clock rewind is clamped: it never emits a smaller timestamp than one it already returned.
 - Output is always 21 chars; no size parameter, no truncation foot-guns.
 
-`sortableId()` is now legacy. Prefer `orderedId()` for new code.
+`sortableId()` is a legacy API; prefer `orderedId()` for new code.
 
 **Batch generation with `orderedId.many(count)`**
 
-`orderedId.many(count)` returns an array of `count` strictly-monotonic IDs. It reads the wall clock once at the start of the batch and again only every 4096 IDs, so the per-ID `Date.now()` cost is amortized across the batch with no background timer and no change to the per-call `orderedId()` path. Ordering is always exact (the counter separates same-millisecond IDs); an embedded timestamp may lag real time by however long it takes to emit up to ~4096 IDs (sub-millisecond in practice). On Node LTS that is roughly 1.7x the throughput of calling `orderedId()` in a loop. `count <= 0` returns `[]`; `count > 1_000_000` throws.
+`orderedId.many(count)` returns an array of `count` strictly-monotonic IDs. It reads the wall clock once at the start of the batch and again only every 4096 IDs, so the per-ID `Date.now()` cost is amortized across the batch with no background timer and no change to the per-call `orderedId()` path. Ordering is always exact (the counter separates same-millisecond IDs); an embedded timestamp may lag real time by however long it takes to emit up to ~4096 IDs (sub-millisecond in practice). On Node 22 that is roughly 1.9x the throughput of calling `orderedId()` in a loop. `count <= 0` returns `[]`; `count > 1_000_000` throws.
 
 ```javascript
 const ids = orderedId.many(10000) // 10,000 sortable IDs, one clock read per 4096
 ids[0] < ids[1] // true (strictly increasing)
 ```
 
-> orderedId is sortable by design — its prefix reveals creation time. **Don't use it as a bearer secret.** For secrets, use `secureToken()`.
+> orderedId is sortable by design: its prefix reveals creation time. **Don't use it as a bearer secret.** For secrets, use `secureToken()`.
 
 ---
 
@@ -673,7 +678,7 @@ ids[0] < ids[1] // true (strictly increasing)
 
 `nopeid()` returns substrings of a long-lived cached pool string for throughput. That cache is fine for public IDs, but for bearer secrets (API keys, session tokens, password-reset tokens) it means a memory dump could expose tokens that have not yet been requested. The `secureToken` family defeats that class of risk: each call allocates its own buffer, fills from CSPRNG, maps to the alphabet, then zeros the raw bytes before returning.
 
-> The returned JavaScript string itself cannot be zeroized — V8 strings are immutable and live in the GC heap. If your threat model requires memory-clearable secrets, keep the bytes as `Buffer`/`Uint8Array` and never `.toString()`.
+> The returned JavaScript string itself cannot be zeroized: V8 strings are immutable and live in the GC heap. If your threat model requires memory-clearable secrets, keep the bytes as `Buffer`/`Uint8Array` and never `.toString()`.
 
 ### `secureToken(size = 48)`
 
@@ -745,25 +750,25 @@ Net rule:
 ## Security profiles
 
 - `nopeid()` is optimized for public, non-secret identifiers. The pooled string cache may hold a window of future-ID material in memory; acceptable for public IDs, inappropriate for bearer secrets.
-- `orderedId()` is optimized for sortable, monotonic identifiers and intentionally reveals creation time in its prefix. Not a secret; safe to expose. For performance it draws its 8-char random tail from a pooled cache (refilled in bulk from CSPRNG), so a memory dump may contain future random-tail material — acceptable because `orderedId()` is not a bearer secret. Use `secureToken()` when unguessability of yet-unissued values matters.
-- `secureToken()` is optimized for bearer secrets. No future-token cache; raw bytes are zeroized after stringification (the returned string itself cannot be zeroed — JavaScript limitation).
-- `apiKey()` and `defineToken()` are convenience wrappers over `secureToken()` — same security profile, plus a stable prefix.
-- `objectId()`, `uuidv7()`, `ulid()`, `snowflake()`, `sqids()` are **structured identifiers**, not bearer secrets — they encode time/sequence/machine-id and must not be used where unguessability matters.
+- `orderedId()` is optimized for sortable, monotonic identifiers and intentionally reveals creation time in its prefix. Not a secret; safe to expose. For performance it draws its 8-char random tail from a pooled cache (refilled in bulk from CSPRNG), so a memory dump may contain future random-tail material, which is acceptable because `orderedId()` is not a bearer secret. Use `secureToken()` when unguessability of yet-unissued values matters.
+- `secureToken()` is optimized for bearer secrets. No future-token cache; raw bytes are zeroized after stringification (the returned string itself cannot be zeroed, a JavaScript limitation).
+- `apiKey()` and `defineToken()` are convenience wrappers over `secureToken()`: same security profile, plus a stable prefix.
+- `objectId()`, `uuidv7()`, `ulid()`, `snowflake()` and `sqidsFactory()` output are **structured identifiers**, not bearer secrets: they encode time, sequence or machine id and must not be used where unguessability matters.
 - `sortableId()` is legacy; prefer `orderedId()` for new code.
 
-> **Benchmarks policy.** A "faster than X" claim against `sparkid`, `nanoid`, `ulid`, etc. is only written into this README if the Benchmarks section measurements on the same machine / Node version / harness back it up. Otherwise we say "comparable performance". `orderedId()` vs `sparkid` per-call is a statistical tie on Node 22 (multi-process Welch t-test, `benchmarks/orderedid-vs-sparkid.bench.js`; the winner flips run-to-run because both pay one `Date.now()` per ID, ~60% of the hot path), so the wording is "comparable throughput". The batch path does win measurably: `orderedId.many()` is ~1.75x a `sparkid` loop because it amortizes the clock read.
+> **Benchmarks policy.** A "faster than X" claim against `sparkid`, `nanoid`, `ulid`, etc. is only written into this README if measurements on the same machine / Node version / harness back it up; otherwise we say "comparable performance". `orderedId()` vs `sparkid` is measured with a multi-process Welch t-test (`benchmarks/orderedid-vs-sparkid.bench.js`): on Node 22 (darwin/arm64) `orderedId()` is about 1.1x `sparkid` per call (both pay one `Date.now()` per ID, the largest part of the hot path), and `orderedId.many()` is about 2.2x a `sparkid` loop because it amortizes the clock read.
 
 ---
 
 ## Non-Secure Version
 
-For non-critical use cases (UI element IDs, temporary keys, etc.), you can use the faster non-secure version:
+For non-critical use cases (UI element IDs, temporary keys, etc.) there is also a `Math.random()` build, `nope-id/non-secure`, for environments where a CSPRNG is unavailable or unwanted:
 
 ```javascript
 // ES Modules
 import { nopeid, sortableId, prefixedId } from 'nope-id/non-secure'
 
-nopeid()      // Uses Math.random() - faster but not cryptographically secure
+nopeid()      // Uses Math.random(): NOT cryptographically secure
 sortableId()  // Still has monotonic guarantee
 prefixedId('user') // Still works the same way
 
@@ -773,6 +778,8 @@ const id = nopeid()
 ```
 
 **Warning:** Do not use for security-sensitive purposes like tokens, passwords, or session IDs!
+
+> **Performance note:** the non-secure build is not the fast path. On Node.js the secure `nopeid()` is about 3x faster, because its pool is filled by one native base64url encode per refill while `Math.random()` output has to be unpacked character by character. Choose `nope-id/non-secure` for its contract, not for speed.
 
 **Use cases for non-secure version:**
 - UI element IDs (React keys, etc.)
@@ -828,7 +835,7 @@ const sessionToken = SessionToken.generate()
 const { apiKey, secureToken, defineToken } = require('nope-id')
 ```
 
-> The `secureToken` family bypasses the `nopeid()` string pool — each call is its own CSPRNG fill, so a memory dump cannot reveal tokens that have not yet been issued. Use it for any bearer secret. Use `nopeid()` / `prefixedId()` for public IDs only.
+> The `secureToken` family bypasses the `nopeid()` string pool: each call is its own CSPRNG fill, so a memory dump cannot reveal tokens that have not yet been issued. Use it for any bearer secret. Use `nopeid()` / `prefixedId()` for public IDs only.
 
 ### URL Shortener
 
@@ -855,7 +862,7 @@ import { distributedId, orderedId, getFingerprint } from 'nope-id'
 
 // Origin-tagged IDs (fingerprint prefix lets you trace which process emitted them)
 const eventId = distributedId()
-// "aB3x_V1StGXR8_Z5jdHi6B"
+// "aB3x_V1StGXR8_Z5jdHi6B-my"
 
 // Log with origin identification
 console.log(`[${getFingerprint()}] Processing event ${eventId}`)
@@ -892,7 +899,7 @@ function CreateUser() {
   // ...
 }
 
-// For non-critical UI keys, use non-secure version for better performance
+// Non-critical UI keys may also use the Math.random() build (never for secrets)
 import { nopeid } from 'nope-id/non-secure'
 ```
 
@@ -942,7 +949,7 @@ app.post('/legacy-api', (req, res) => {
 | Secure random | ✅ | ✅ |
 | URL-safe | ✅ | ✅ |
 | TypeScript | ✅ | ✅ |
-| ESM + CommonJS | ✅ | ⚠️ ESM-only (dropped CJS in v4) |
+| ESM + CommonJS | ✅ | ⚠️ ESM-only |
 | Prefixed IDs | ✅ | ❌ |
 | Sortable IDs (ULID-like) | ✅ | ❌ |
 | Monotonic guarantee | ✅ | ❌ |
@@ -988,32 +995,36 @@ nope-id is designed with security as a top priority. We've implemented multiple 
 
 ### Cryptographic Security
 
-- **Node.js**: `webcrypto.getRandomValues()` (CSPRNG)
+- **Node.js**: `crypto.randomFillSync()` from `node:crypto` (CSPRNG)
 - **Browser**: `crypto.getRandomValues()` (CSPRNG)
 
 ### Security Hardening
 
 | Security Feature | Description |
 |-----------------|-------------|
-| **Timing Attack Prevention** | `isValid()` uses constant-time comparison to prevent timing side-channel attacks that could leak information about valid characters |
+| **Reduced Timing Leaks** | `isValid()` checks every character with a table lookup and never returns early at the first invalid one, so its running time depends on the input length, not on where an invalid character sits |
 | **Modulo Bias Elimination** | Uses rejection sampling to ensure perfectly uniform distribution for all alphabet sizes (not just powers of 2) |
 | **Prototype Pollution Protection** | `alphabets` object is frozen with null prototype - immune to prototype pollution attacks |
 | **Integer Overflow Protection** | `collisionProbability()` uses BigInt for accurate calculations with astronomically large numbers |
-| **DoS Prevention** | `sortableId()` has iteration limits to prevent infinite loops from frozen system clocks |
-| **Buffer Safety** | Pool management handles `>65536` byte requests safely with chunked filling |
+| **DoS Prevention** | `sortableId()` bounds its wait on a frozen system clock, `customRandom()` throws on a `getRandom` that never yields a usable byte, and `defineId()`, `distributedId()`, `secureToken()` and sqids `minLength` enforce size limits |
+| **Buffer Safety** | Requests above 64 KiB get a one-shot buffer, so the shared pool never grows; Web Crypto calls stay within their 65536-byte limit |
 
 ### Best Practices
 
-- Use the secure version (default) for tokens, session IDs, API keys
-- Use `sortableId()` for time-based ordering with collision resistance
-- Use `distributedId()` in multi-node deployments
+- Use `secureToken()`, `apiKey()` or `defineToken()` for bearer secrets (session tokens, API keys, reset tokens)
+- Use `orderedId()` for time-ordered, strictly-monotonic IDs
+- Use `distributedId()` when an ID should show which process created it
 - Only use `nope-id/non-secure` for non-security-critical purposes
+
+### Reporting a Vulnerability
+
+Please report suspected vulnerabilities privately, as described in [SECURITY.md](../SECURITY.md).
 
 ---
 
 ## Testing
 
-nope-id has comprehensive test coverage with **408 tests** across 11 test suites, including security-specific tests.
+nope-id has comprehensive test coverage with **429 tests** across 11 test suites, including security-specific tests.
 
 ### Run Tests
 
@@ -1026,31 +1037,37 @@ npm run test:core        # Core functions (nopeid, customAlphabet, random)
 npm run test:features    # Features (prefixedId, sortableId, uuid, etc.)
 npm run test:utils       # Utilities (isValid, collisionProbability)
 npm run test:non-secure  # Non-secure version tests
-npm run test:idtypes     # New ID types (uuidv7, ulid, snowflake, objectId)
+npm run test:idtypes     # ID formats (uuidv7, ulid, snowflake, objectId)
 npm run test:encoding    # Sqids, typed IDs, format validators
 npm run test:secure-token # secureToken, apiKey, defineToken
 npm run test:ordered-id  # orderedId, orderedId.many, parse, asciiBytes
 npm run test:parity      # ESM/CJS/browser surface + error-message parity
-npm run test:tiers       # customAlphabet refill tiers (hex / pow-2 / rejection)
+npm run test:tiers       # customAlphabet refill tiers (native / pow-2 / rejection)
 npm run test:pack        # npm tarball manifest guard (exact shipped file list)
+
+# Extra gates (also run in CI)
+npm run test:types       # TypeScript declarations for import (ESM) and require (CommonJS)
+npm run test:browser     # browser build under Node's Web Crypto and TextDecoder
+npm run test:randomness  # statistical comparison vs nanoid
+npm run test:all         # npm test + all three extra gates
 ```
 
 ### Test Coverage
 
 | Test Suite | Tests | Description |
 |------------|-------|-------------|
-| **Core** | 85 | nopeid, customAlphabet, customRandom, random, alphabets |
-| **Features** | 79 | prefixedId, sortableId, uuid, slugId, shortId, distributedId |
+| **Core** | 88 | nopeid, customAlphabet, customRandom, random, alphabets |
+| **Features** | 82 | prefixedId, sortableId, uuid, slugId, shortId, distributedId |
 | **Utils** | 56 | isValid, collisionProbability, security tests |
-| **Non-Secure** | 30 | Math.random() based version |
-| **ID Types** | 43 | uuidv7, ulid, monotonicFactory, snowflake, objectId |
-| **Encoding** | 33 | sqids, defineId, isValidUUID, isValidULID |
+| **Non-Secure** | 32 | Math.random() based version |
+| **ID Types** | 45 | uuidv7, ulid, monotonicFactory, snowflake, objectId |
+| **Encoding** | 38 | sqids, defineId, isValidUUID, isValidULID |
 | **Secure Token** | 26 | secureToken, apiKey, defineToken |
 | **Ordered ID** | 16 | orderedId, orderedId.many, parse, asciiBytes |
 | **Parity** | 17 | ESM/CJS/browser surface + byte-identical error messages |
-| **Alphabet Tiers** | 21 | customAlphabet refill tiers, customRandom chunking |
+| **Alphabet Tiers** | 27 | customAlphabet refill tiers, customRandom chunking |
 | **Pack Manifest** | 2 | exact npm tarball file list (no stray files can ship) |
-| **Total** | **408** | All tests passing |
+| **Total** | **429** | All tests passing |
 
 ### Security Tests
 
@@ -1157,11 +1174,13 @@ nope-id is the fastest **JavaScript** library for a specific, very common job: a
 The speed comes from the engineering, not from cutting corners on randomness:
 
 - **Cached pool string:** on refill, 49152 raw CSPRNG bytes are encoded **once** with a single native `Buffer.toString('base64url')` into a flat 65536-char string cached as `idPoolStr` (base64url's character set is exactly the URL-safe alphabet, and every char carries 6 uniform bits). Each `nopeid()` call then returns a single `idPoolStr.substring(start, end)`, a V8 SlicedString (O(1), zero-copy) for sizes ≥ 13 and a tiny inline copy below that, instead of paying a per-call encode cost. Same trick powers `customAlphabet`, `uuid()`, and friends.
-- **Native encode, no JS translate loop:** the refill has zero per-byte JavaScript work and consumes all 8 bits of every random byte (the pre-1.4 design discarded 2 bits per byte in a `byte & 63` translate loop), so a refill costs ~2.3x less and draws 25% fewer CSPRNG bytes per char. The browser build uses native `Uint8Array.toBase64` where available (current Chrome/Firefox/Safari) and keeps the 16-bit translate table as a fallback for older engines.
-- **Pooled CSPRNG:** one `randomFillSync()` fill (`crypto.getRandomValues()` in the browser) covers thousands of IDs at the default size instead of one syscall per ID. `uuid()` goes further: it pre-formats 1820 v4 UUIDs (with version + RFC 4122 variant bits already patched per slot) into one 65520-char string — sized to stay under V8's large-string allocation cliff — so each call is just a `substring(start, start+36)`. `uuidv7()` does the same for its random part: a pool of 2048 pre-formatted 21-char tails with the hyphens and `[89ab]` variant already baked in, making each call the cached ms prefix plus one `substring`.
+- **Native encode, no JS translate loop:** the refill does no per-byte JavaScript work and uses all 8 bits of every random byte (every 3 bytes become 4 characters). The browser build uses native `Uint8Array.toBase64` where available (current Chrome/Firefox/Safari) and keeps the 16-bit translate table as a fallback for older engines. Every browser pool decodes with a UTF-8 `TextDecoder`, identical for these ASCII characters and far faster than the `latin1` label (which is really windows-1252).
+- **Pooled CSPRNG:** one `randomFillSync()` fill (`crypto.getRandomValues()` in the browser) covers thousands of IDs at the default size instead of one syscall per ID. `uuid()` goes further: it pre-formats 1820 v4 UUIDs (with version + RFC 4122 variant bits already patched per slot) into one 65520-char string (sized to stay under V8's large-string allocation cliff), so each call is just a `substring(start, start+36)`. `uuidv7()` does the same for its random part: a pool of 2048 pre-formatted 21-char tails with the hyphens and `[89ab]` variant already baked in, making each call the cached ms prefix plus one `substring`.
 - **No bias, by construction:** `nopeid()`'s base64url chars are exact 6-bit groups of the CSPRNG stream (a bijection, nothing to reject), and non-power-of-2 custom alphabets keep full rejection sampling, so no path has modulo bias.
-- **Shape-tiered `customAlphabet`:** the factory picks its refill strategy once per alphabet: fully native hex encode for hex alphabets, a branch-free bulk translate for power-of-2 lengths, and 16-bit double-digit rejection sampling for everything else — each accepted uint16 below the largest multiple of len² yields **two** uniform characters, roughly doubling the chars per CSPRNG byte and halving the accept-loop iterations (the few alphabet lengths where byte-wise sampling still yields more, 182-255, keep it). The hot path is always one `substring(start, end)`; this also speeds up `slugId()` and `shortId()`.
-- **Time-prefix caching:** `sortableId()`, `ulid()`, `uuidv7()`, and `objectId()` re-encode their timestamp prefix only when the clock value actually changes, and take their random tails from pre-encoded pooled strings — `ulid()` repacks each 32-bit CSPRNG word into six bias-free 5-bit Crockford digits — so the per-call path is a short string concat. `objectId()` and `monotonicFactory()` additionally cache everything but the last hot character, so their common case is a two-piece concat.
+- **Shape-tiered `customAlphabet`:** the factory picks its refill strategy once per alphabet. An alphabet with exactly the hex, base64url or base64 character set, in any order (so `alphabets.filename` qualifies), is one native encode per refill; other power-of-2 lengths take a branch-free bulk translate; lengths where a byte cutoff keeps at least 95% of the random bytes (`numbers`, `alphanumeric`, the 36 characters of `slugId()`) reject each byte against that cutoff with a single table lookup; the rest use 16-bit double-digit rejection sampling, where each accepted uint16 below the largest multiple of len² yields **two** uniform characters. The hot path is always one `substring(start, end)`.
+- **Cutoff rejection in `customRandom()`:** bytes below the largest multiple of the alphabet length map through a 256-entry table, so a 17-character alphabet keeps 99.6% of the random bytes (a power-of-2 mask would keep 53%), with almost no mispredicted branches. Power-of-2 alphabets take a branch-free translate.
+- **Tables and caches instead of per-call scans:** `decodeTime()` and `decodeObjectIdTime()` decode through char-code tables (no case conversion, regex or `parseInt()` per call), the `defineId()`/`defineToken()` guards scan the body in place without slicing it, and `sqidsFactory()` caches its per-offset work alphabets, so a typical encode does no rotation or shuffle at all.
+- **Time-prefix caching:** `sortableId()`, `ulid()`, `uuidv7()`, and `objectId()` re-encode their timestamp prefix only when the clock value actually changes, and take their random tails from pre-encoded pooled strings (`ulid()` repacks each 32-bit CSPRNG word into six bias-free 5-bit Crockford digits), so the per-call path is a short string concat. `objectId()` caches everything but its last counter byte and `monotonicFactory()` everything but its last character, so their common case is a two-piece concat.
 - **Precomputed tables for everything else:** packed byte-to-hex 16-bit stores for `uuid()`/`uuidv7()`, Crockford char codes for `ulid()`/`monotonicFactory()`, plus reusable module-scope scratch buffers so the per-call path never allocates.
 
 What nope-id does **not** try to beat:
@@ -1202,7 +1221,7 @@ nope-id ships a spec-compliant `ulid()` plus an isolated `monotonicFactory()`. S
 | `ulid` package (monotonic) | ~2.2M |
 <!-- bench:ulid-table:end -->
 
-nope-id is far faster for plain `ulid()` because it draws randomness from a pooled buffer (one fill per 16 IDs), whereas the `ulid` package fetches randomness per character. Decode the timestamp from either with `decodeTime()`. (The `ulid` package is also zero-dependency.)
+nope-id is far faster for plain `ulid()` because its random part comes from a pooled, pre-encoded string (one CSPRNG fill covers 3072 IDs), whereas the `ulid` package fetches randomness per character. Decode the timestamp from either with `decodeTime()`. (The `ulid` package is also zero-dependency.)
 
 ### Sortable head-to-head: `sparkid` vs nope-id `sortableId()`
 
@@ -1237,7 +1256,7 @@ Read as two axes, **speed** and **security**, every other library gives somethin
 - **`rndm`** is fast too, but it is built on `Math.random`, so its bits are predictable; its own README calls it "not cryptographically secure."
 - **`secure-random-string`** matches nope-id's entropy but is roughly 80x slower and emits base64 (not URL-safe).
 - **cuid2** spends speed on purpose for a hardened, sharding-safe, hash-based model.
-- **`sparkid`** is CSPRNG-backed, time-sortable + monotonic, and very fast in its niche; it spends 8 of its 21 chars on a Base58 timestamp prefix, leaving ~76 bits of unguessable randomness per id (close to ULID territory). If you want **maximum randomness per id**, nope-id's `nopeid()` keeps the full 126 bits at the same length. If you specifically want **sortable + monotonic**, sparkid holds its own (see the head-to-head above); nope-id also offers `sortableId()`, `ulid()`, and `monotonicFactory()` for ULID-compatible 26-char Crockford output.
+- **`sparkid`** is CSPRNG-backed, time-sortable + monotonic, and very fast in its niche; it spends 8 of its 21 chars on a Base58 timestamp prefix, leaving ~76 bits of unguessable randomness per id (close to ULID territory). If you want **maximum randomness per id**, nope-id's `nopeid()` keeps the full 126 bits at the same length. If you specifically want **sortable + monotonic** IDs, sparkid is a solid choice; nope-id's [`orderedId()`](#orderedid) has the same 21-char Base58 shape with one more random char per ID, and `ulid()`/`monotonicFactory()` produce ULID-compatible 26-char Crockford output.
 - **nanoid** matches nope-id's entropy exactly (same 64-char alphabet); nope-id is simply <!-- bench:basic-21-ratio:start -->~2.1x<!-- bench:basic-21-ratio:end --> faster at the default 21-char size.
 
 nope-id is the one row that has **all three at once**: maximum entropy per character (126 bits), a real CSPRNG, and top-tier speed. That is the whole design goal, fast without ever spending randomness to get there. (For a plain v4 UUID, native `crypto.randomUUID()` is roughly tied with nope-id's `uuid()` at 122 bits in C++; reach for the stdlib if a v4 UUID is all you need and you do not want a dependency.)
@@ -1267,7 +1286,7 @@ These features are exclusive to nope-id (nanoid doesn't have them):
 
 ## Disclaimer
 
-While nope-id uses cryptographically secure random number generators (`crypto.getRandomValues`) and implements security best practices, **no software can guarantee 100% randomness or absolute security**. The quality of randomness ultimately depends on the underlying operating system's entropy source.
+While nope-id uses cryptographically secure random number generators (`crypto.randomFillSync` in Node.js, `crypto.getRandomValues` in browsers) and implements security best practices, **no software can guarantee 100% randomness or absolute security**. The quality of randomness ultimately depends on the underlying operating system's entropy source.
 
 For extremely high-security applications (e.g., cryptographic keys, long-term secrets), consider using dedicated cryptographic libraries that have undergone formal security audits.
 

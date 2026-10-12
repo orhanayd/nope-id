@@ -1,10 +1,17 @@
-// Before/after micro-benchmark for the Findings #1, #2, #3 fixes.
-// Imports the snapshot of index.js taken before the changes from /tmp/old-index.mjs
-// and the current index.js, then runs the same workload against both in the same
-// process. Numbers are best-of-N at a fixed ~120 ms window, like benchmarks/benchmark.js.
+// Quick snapshot-vs-current micro-benchmark for exploring a change to index.js.
+//
+//   cp index.js /tmp/old.mjs                      # snapshot before editing
+//   node benchmarks/findings.bench.js [snapshot]  # default snapshot: /tmp/old.mjs
+//
+// Both modules run the same workload in ONE process, so mixed JIT feedback can
+// skew the result (CLAUDE.md Rule 2): use it to explore, and accept a change
+// only after a multi-process Welch run with benchmarks/ab-multiproc.mjs.
+// Numbers are best-of-N at a fixed ~120 ms window, like benchmarks/benchmark.js.
 
-import * as oldMod from '/tmp/old-index.mjs'
+import { pathToFileURL } from 'node:url'
 import * as newMod from '../index.js'
+
+const oldMod = await import(pathToFileURL(process.argv[2] || '/tmp/old.mjs').href)
 
 const TRIALS = 7
 const TARGET_MS = 120
@@ -40,46 +47,35 @@ const pct = (newOps, oldOps) => {
 // Warmup so V8 has the same JIT state for both modules
 for (let i = 0; i < 200000; i++) { oldMod.nopeid(); newMod.nopeid() }
 
-// Fixed sample IDs so both versions see identical input
+// Fixed sample ID so both versions validate identical input
 const sampleId = newMod.nopeid()
-const sampleIds = []
-for (let i = 0; i < 100; i++) sampleIds.push(newMod.nopeid())
 
 console.log('\n' + '═'.repeat(70))
-console.log('  Findings #1, #2, #3 — before/after benchmark')
+console.log('  snapshot vs current index.js (same process)')
 console.log('═'.repeat(70))
 
 const rows = []
 const compare = (label, oldFn, newFn) => {
-  const o = bench(label + ' (old)', oldFn)
-  const n = bench(label + ' (new)', newFn)
+  const o = bench(label + ' (snapshot)', oldFn)
+  const n = bench(label + ' (current)', newFn)
   rows.push({ label, oldOps: o.opsPerSec, newOps: n.opsPerSec })
 }
 
-// === Finding #1: isValid ===
+compare('nopeid()', () => oldMod.nopeid(), () => newMod.nopeid())
 compare('isValid(default urlAlphabet)', () => oldMod.isValid(sampleId), () => newMod.isValid(sampleId))
 compare('isValid(custom alphabet)',
   () => oldMod.isValid(sampleId, 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_'),
   () => newMod.isValid(sampleId, 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_')
 )
-
-// === Finding #2: slugId / shortId ===
-compare('slugId() default 12', () => oldMod.slugId(), () => newMod.slugId())
-compare('slugId(20)  non-default', () => oldMod.slugId(20), () => newMod.slugId(20))
-compare('shortId() default 8', () => oldMod.shortId(), () => newMod.shortId())
-compare('shortId(16) non-default', () => oldMod.shortId(16), () => newMod.shortId(16))
-
-// === Finding #3: sortableId / monotonicFactory (new-ms path is rare; we hit it once)
-// Most calls hit the same-ms increment path, so the Array.from change rarely fires.
-// Still measure to confirm no regression.
+compare('slugId()', () => oldMod.slugId(), () => newMod.slugId())
+compare('shortId()', () => oldMod.shortId(), () => newMod.shortId())
 compare('sortableId()', () => oldMod.sortableId(), () => newMod.sortableId())
 const oldMono = oldMod.monotonicFactory()
 const newMono = newMod.monotonicFactory()
-compare('monotonicFactory.next', () => oldMono(), () => newMono())
+compare('monotonicFactory()()', () => oldMono(), () => newMono())
 
-// === Print table ===
 console.log()
-console.log(`  ${'Test'.padEnd(36)} ${'old'.padStart(14)} ${'new'.padStart(14)}    delta`)
+console.log(`  ${'Test'.padEnd(36)} ${'snapshot'.padStart(14)} ${'current'.padStart(14)}    delta`)
 console.log('  ' + '─'.repeat(82))
 for (const r of rows) {
   console.log(

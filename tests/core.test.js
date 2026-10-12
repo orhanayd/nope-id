@@ -1,4 +1,5 @@
 // Core Functions Tests - nopeid, customAlphabet, customRandom, random
+import { execFileSync } from 'node:child_process'
 import { test, describe, runTests, assert } from './test-utils.js'
 import {
   nopeid,
@@ -361,14 +362,13 @@ describe('nopeid() edge cases', () => {
   })
 
   test('pool refills correctly after many generations', () => {
-    // Generate enough IDs to force pool refill multiple times
-    // Pool size is 128 * size, so with size 21, pool is 2688 bytes
-    // After ~128 IDs, pool should refill
+    // The pool holds 65536 chars (~3120 IDs of 21 chars), so 10000 IDs cross
+    // at least three refills wherever the pool offset starts
     const ids = new Set()
-    for (let i = 0; i < 500; i++) {
+    for (let i = 0; i < 10000; i++) {
       ids.add(nopeid(21))
     }
-    assert.equal(ids.size, 500, 'All IDs should be unique after pool refills')
+    assert.equal(ids.size, 10000, 'All IDs should be unique after pool refills')
   })
 
   test('generates different IDs in rapid succession', () => {
@@ -387,7 +387,7 @@ describe('random() edge cases', () => {
     const small = random(10)
     assert.equal(small.length, 10)
 
-    // Then request much larger - should trigger pool expansion
+    // Then a much larger one: the shared pool grows as needed (up to 64 KiB)
     const large = random(1000)
     assert.equal(large.length, 1000)
 
@@ -395,6 +395,25 @@ describe('random() edge cases', () => {
     for (let i = 0; i < large.length; i++) {
       assert.ok(large[i] >= 0 && large[i] <= 255)
     }
+  })
+
+  test('requests above the 64 KiB pool are one-shot and never grow the shared pool', () => {
+    // Growing the shared pool for these would keep the largest request alive for
+    // the process lifetime (200 MB after random(200e6)). A child process with
+    // --expose-gc measures what stays allocated after the big requests.
+    const builds = ['index.js', 'index.cjs', 'index.browser.js']
+      .map(f => new URL(`../${f}`, import.meta.url).href)
+    const script = `
+      for (const url of ${JSON.stringify(builds)}) {
+        const m = await import(url)
+        if (m.random(32 * 1024 * 1024).length !== 32 * 1024 * 1024) throw new Error('random length')
+        if (m.sortableId(100000).length !== 100000) throw new Error('sortableId length')
+      }
+      gc()
+      process.stdout.write(String(process.memoryUsage().arrayBuffers))`
+    const retained = Number(execFileSync(process.execPath,
+      ['--expose-gc', '--input-type=module', '-e', script], { encoding: 'utf8' }))
+    assert.ok(retained < 8 * 1024 * 1024, `pools retained ${retained} bytes after large requests`)
   })
 })
 
@@ -437,7 +456,7 @@ describe('customAlphabet() edge cases', () => {
     assert.equal(gen(true).length, 1)
   })
 
-  test('edge-case sizes do not poison the pool (regression: NaN/string offset)', () => {
+  test('edge-case sizes do not poison the pool (NaN/string offsets)', () => {
     const gen = customAlphabet('abcdefgh', 16)
     gen(NaN)
     for (let i = 0; i < 100; i++) {
@@ -445,6 +464,17 @@ describe('customAlphabet() edge cases', () => {
     }
     gen('8')
     assert.equal(gen(16).length, 16, 'call after string size must stay 16 chars')
+  })
+
+  test('non-string alphabets throw a clear error', () => {
+    // Without the type check a number reaches the tiers (internal RangeError; the browser build hangs)
+    for (const alphabet of [12345, ['a', 'b', 'c'], { length: 3 }, true]) {
+      assert.throws(() => customAlphabet(alphabet), /Alphabet must be a string/)
+      assert.throws(() => customRandom(alphabet, 5, random), /Alphabet must be a string/)
+    }
+    for (const alphabet of ['', null, undefined]) {
+      assert.throws(() => customAlphabet(alphabet), /Alphabet cannot be empty/)
+    }
   })
 })
 
@@ -477,6 +507,17 @@ describe('customRandom() edge cases', () => {
     assert.equal(gen(16).length, 16, 'call after string size must stay 16 chars')
     assert.equal(gen(-3), '')
     assert.equal(gen().length, 10)
+  })
+
+  test('a getRandom that never yields an acceptable byte throws instead of hanging', () => {
+    // 255 is the one byte a 3-char alphabet rejects (cutoff 255): a constant 255
+    // would make the refill loop forever without the stuck-generator check
+    const stuck = size => new Uint8Array(size).fill(255)
+    const gen = customRandom('abc', 5, stuck)
+    assert.throws(() => gen(), /getRandom returned no bytes usable for this alphabet/)
+    assert.throws(() => gen(40000), /getRandom returned no bytes usable for this alphabet/)
+    // A constant but acceptable byte is still a (degenerate) generator, not an error
+    assert.equal(customRandom('abc', 5, size => new Uint8Array(size).fill(1))(), 'bbbbb')
   })
 })
 
@@ -603,7 +644,7 @@ describe('Boundary Tests', () => {
 
   test('cold path (size > pool) with non-multiple-of-4 size: exact length, charset, distribution', () => {
     // 100001 chars forces the >MAX_POOL_SIZE cold path AND a trailing partial
-    // encode group boundary. Every char must come from a full 3-byte group —
+    // encode group boundary. Every char must come from a full 3-byte group:
     // a padding/partial-group bug would skew the tail chars' distribution.
     const id = nopeid(100001)
     assert.equal(id.length, 100001)
@@ -655,13 +696,12 @@ describe('Stress Tests', () => {
   })
 
   test('pool exhaustion and refill cycle', () => {
-    // Generate enough to exhaust pool multiple times
-    // Pool size = 21 * 128 = 2688 bytes, so ~128 IDs per pool
+    // 65536-char pool, ~3120 IDs of 21 chars: 10000 IDs exhaust it at least three times
     const ids = new Set()
-    for (let i = 0; i < 1000; i++) {
+    for (let i = 0; i < 10000; i++) {
       ids.add(nopeid(21))
     }
-    assert.equal(ids.size, 1000, 'All IDs unique across pool refills')
+    assert.equal(ids.size, 10000, 'All IDs unique across pool refills')
   })
 
   test('varying sizes in sequence', () => {

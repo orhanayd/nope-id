@@ -77,12 +77,19 @@ describe('non-secure customAlphabet()', () => {
   })
 
   test('edge-case sizes return "" and leave the generator healthy', () => {
-    // The non-secure build has no pool to poison (per-call fromCharCode),
-    // but pin the same external contract as the secure builds.
+    // Same contract as the secure builds: NaN or negative sizes return ''
+    // without poisoning the pooled generator.
     const gen = customAlphabet('abcdefgh', 16)
     assert.equal(gen(NaN), '')
     assert.equal(gen(-3), '')
     for (let i = 0; i < 20; i++) assert.match(gen(), /^[a-h]{16}$/)
+  })
+
+  test('non-string alphabets throw (a number would yield NUL characters)', () => {
+    for (const alphabet of [12345, ['a', 'b'], { length: 3 }]) {
+      assert.throws(() => customAlphabet(alphabet), /Alphabet must be a string/)
+    }
+    assert.throws(() => customAlphabet(''), /Alphabet cannot be empty/)
   })
 })
 
@@ -115,6 +122,14 @@ describe('non-secure sortableId()', () => {
   test('has correct length', () => {
     assert.equal(sortableId().length, 22)
     assert.equal(sortableId(30).length, 30)
+  })
+
+  test('size is coerced with |0 like nopeid (2**32+5 must not hang)', () => {
+    assert.equal(sortableId(2 ** 32 + 5).length, 5)
+    assert.equal(sortableId(Infinity), '')
+    assert.equal(sortableId(NaN), '')
+    assert.equal(sortableId(2 ** 31), '')
+    assert.equal(sortableId(15.9).length, 15)
   })
 
   test('same-millisecond IDs are monotonically increasing', () => {

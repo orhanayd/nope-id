@@ -1,10 +1,10 @@
-// orderedId() tests — format, monotonicity, parse round-trip, edge cases.
+// orderedId() tests: format, monotonicity, parse round-trip, edge cases.
 import { test, describe, runTests, assert } from './test-utils.js'
 import { orderedId } from '../index.js'
 
 const BASE58_RE = /^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]{21}$/
 
-describe('orderedId() — format', () => {
+describe('orderedId(): format', () => {
   test('emits 21-char Base58 string', () => {
     for (let i = 0; i < 100; i++) {
       const id = orderedId()
@@ -27,7 +27,7 @@ describe('orderedId() — format', () => {
   })
 })
 
-describe('orderedId() — monotonicity', () => {
+describe('orderedId(): monotonicity', () => {
   test('strictly increasing within the same millisecond', () => {
     const ids = []
     for (let i = 0; i < 500; i++) ids.push(orderedId())
@@ -58,7 +58,7 @@ describe('orderedId() — monotonicity', () => {
   })
 })
 
-describe('orderedId() — parse round-trip', () => {
+describe('orderedId(): parse round-trip', () => {
   test('parse returns Date, counter number, and 8-char random tail', () => {
     const id = orderedId()
     const parts = orderedId.parse(id)
@@ -88,7 +88,7 @@ describe('orderedId() — parse round-trip', () => {
   })
 })
 
-describe('orderedId() — asciiBytes', () => {
+describe('orderedId(): asciiBytes', () => {
   test('returns a 21-byte buffer matching the string char codes', () => {
     const bytes = orderedId.asciiBytes()
     assert.equal(bytes.length, 21)
@@ -98,7 +98,7 @@ describe('orderedId() — asciiBytes', () => {
   })
 })
 
-describe('orderedId.many() — batch', () => {
+describe('orderedId.many(): batch', () => {
   test('returns exactly count IDs, all 21-char Base58, all distinct', () => {
     const ids = orderedId.many(5000)
     assert.equal(ids.length, 5000)

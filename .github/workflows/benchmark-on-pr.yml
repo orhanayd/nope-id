@@ -4,9 +4,9 @@ on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened]
-  # Manual rerun from the Actions tab. Useful when a PR commit message accidentally
-  # contained a CI skip marker (the literal string [<<skip>> ci], without the brackets-around-word
-  # form GitHub treats as a directive), so the pull_request event was suppressed.
+  # Manual rerun from the Actions tab. Useful when a PR commit message contains a
+  # CI skip marker (the literal string [<<skip>> ci], without the brackets-around-word
+  # form GitHub treats as a directive), which suppresses the pull_request event.
   # When dispatched manually we benchmark the chosen ref but do not commit back.
   workflow_dispatch:
     inputs:

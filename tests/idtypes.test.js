@@ -1,4 +1,4 @@
-// New ID Types Tests - uuidv7, ulid, monotonicFactory, snowflake, objectId
+// ID Format Tests - uuidv7, ulid, monotonicFactory, snowflake, objectId
 import { test, describe, runTests, assert } from './test-utils.js'
 import {
   uuidv7,
@@ -16,7 +16,7 @@ import {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
-// assert.throws ignores messages; msgOf pins the exact error text.
+// msgOf returns the thrown message so a test can pin the exact error text.
 const msgOf = fn => { try { fn(); return null } catch (e) { return e.message } }
 const ULID_TIME_ERR = 'ULID seedTime must be an integer between 0 and 281474976710655'
 
@@ -244,7 +244,7 @@ describe('snowflakeFactory() / snowflake()', () => {
     assert.equal(ids.size, 5000)
   })
 
-  test('nodeId outside 0-1023 throws at factory time (was silently masked)', () => {
+  test('nodeId outside 0-1023 throws at factory time (no silent masking)', () => {
     assert.equal(decodeSnowflake(snowflakeFactory({ nodeId: 1023 })()).nodeId, 1023)
     assert.equal(decodeSnowflake(snowflakeFactory({ nodeId: 0 })()).nodeId, 0)
     assert.equal(decodeSnowflake(snowflakeFactory()()).nodeId, 0, 'omitted nodeId defaults to 0')
@@ -257,6 +257,25 @@ describe('snowflakeFactory() / snowflake()', () => {
   test('invalid epoch option throws a friendly error', () => {
     assert.equal(msgOf(() => snowflakeFactory({ epoch: 'abc' })), 'Invalid snowflake epoch')
     assert.equal(msgOf(() => snowflakeFactory({ epoch: 1.5 })), 'Invalid snowflake epoch')
+    // Absurd epochs (before 1970 or beyond 2^53) would push ids past exact double range
+    assert.equal(msgOf(() => snowflakeFactory({ epoch: -1 })), 'Invalid snowflake epoch')
+    assert.equal(msgOf(() => snowflakeFactory({ epoch: 10n ** 20n })), 'Invalid snowflake epoch')
+  })
+
+  test('a clock before the epoch throws instead of emitting negative ids', () => {
+    // A negative id would be a '-…' string that decodeSnowflake rejects
+    const next = snowflakeFactory({ epoch: Date.now() + 60000 })
+    assert.equal(msgOf(() => next()), 'Snowflake clock is before the epoch')
+  })
+
+  test('epoch boundaries: a custom epoch of now decodes back exactly', () => {
+    const epoch = Date.now()
+    const next = snowflakeFactory({ nodeId: 3, epoch })
+    const parts = decodeSnowflake(next(), epoch)
+    assert.equal(parts.nodeId, 3)
+    assert.ok(Math.abs(parts.timestamp.getTime() - Date.now()) < 2000)
+    // String epochs are BigInt-convertible and accepted
+    assert.type(snowflakeFactory({ epoch: String(epoch) })(), 'string')
   })
 
   test('decodeSnowflake rejects malformed ids with a friendly error', () => {

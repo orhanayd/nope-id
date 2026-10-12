@@ -4,7 +4,7 @@ import { secureToken, apiKey, defineToken, isValid, urlAlphabet } from '../index
 
 const URL_SAFE_RE = /^[A-Za-z0-9_-]+$/
 
-// assert.throws ignores messages; msgOf pins the exact error text.
+// msgOf returns the thrown message so a test can pin the exact error text.
 const msgOf = fn => { try { fn(); return null } catch (e) { return e.message } }
 
 describe('secureToken()', () => {
@@ -44,7 +44,7 @@ describe('secureToken()', () => {
     assert.match(t, URL_SAFE_RE)
   })
 
-  test('throws above the 65536 max with a pinned message (was a native crash)', () => {
+  test('throws above the 65536 max with a pinned message (no native crash)', () => {
     const MAX_ERR = 'secureToken size must be an integer between 32 and 65536'
     for (const bad of [65537, 2 ** 31, 1e10]) {
       assert.equal(msgOf(() => secureToken(bad)), MAX_ERR, `size ${bad} must throw`)

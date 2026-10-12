@@ -71,6 +71,24 @@ describe('sqidsFactory()', () => {
     assert.equal(sqidsFactory({ alphabet: 'abc123XYZ', blocklist: ['abc'] }).encode([5, 10]), 'cbYba')
   })
 
+  test('long lists and long padding past the cached rounds stay byte-identical', () => {
+    // The first 8 work-alphabet rounds per offset are cached; deeper rounds (20
+    // numbers, or minLength 255 padding) are computed on the fly. The golden
+    // outputs come from an uncached run, so the cache must not change a byte.
+    const nums = Array.from({ length: 20 }, (_, i) => i * 7919)
+    const golden = 'uY2rGXYg2oFhXtDl2T7XtzvrHxGkdr7a8fBRfCIYm5TftDSCVmgVTTHrcrBKDg0thxoV0wFzLYot60'
+    const warm = sqidsFactory()
+    for (let i = 0; i < 500; i++) warm.encode([i, i + 1, i + 2]) // populate the cache
+    assert.equal(warm.encode(nums), golden)
+    assert.equal(sqidsFactory().encode(nums), golden)
+    assert.deepEqual(warm.decode(golden), nums)
+    const padded = sqidsFactory({ minLength: 255 })
+    const id = padded.encode([3, 1, 4, 1, 5, 9, 2, 6, 5, 3])
+    assert.equal(id.length, 255)
+    assert.equal(id.slice(0, 24), '7adGDL7M43gRHoP9NhnydDIO')
+    assert.deepEqual(padded.decode(id), [3, 1, 4, 1, 5, 9, 2, 6, 5, 3])
+  })
+
   test('different inputs produce different outputs', () => {
     assert.notEqual(sqids.encode([1]), sqids.encode([2]))
     assert.notEqual(sqids.encode([1, 2]), sqids.encode([2, 1]))
@@ -95,6 +113,21 @@ describe('sqidsFactory()', () => {
   test('throws on too-short or duplicate alphabet', () => {
     assert.throws(() => sqidsFactory({ alphabet: 'ab' }))
     assert.throws(() => sqidsFactory({ alphabet: 'aab' }))
+  })
+
+  test('an explicit invalid alphabet throws instead of falling back to the default', () => {
+    assert.throws(() => sqidsFactory({ alphabet: '' }), /at least 3 characters/)
+    assert.throws(() => sqidsFactory({ alphabet: 12345 }), /alphabet must be a string/)
+    assert.equal(sqidsFactory({ alphabet: undefined }).encode([1, 2, 3]), sqids.encode([1, 2, 3]))
+  })
+
+  test('minLength must be an integer in 0..255 (Sqids reference range)', () => {
+    for (const minLength of [-1, 256, 2.5, NaN, '10', 1e9]) {
+      assert.throws(() => sqidsFactory({ minLength }), /minLength must be an integer between 0 and 255/)
+    }
+    const max = sqidsFactory({ minLength: 255 })
+    assert.equal(max.encode([7]).length, 255)
+    assert.deepEqual(max.decode(max.encode([7])), [7])
   })
 })
 
@@ -153,6 +186,19 @@ describe('defineId()', () => {
   test('throws on non-string prefix', () => {
     assert.throws(() => defineId(123))
     assert.throws(() => defineId(null))
+  })
+
+  test('size must be an integer in 1..65536 (no constant ids from wrapped sizes)', () => {
+    // Without the cap, 2**31 would pass validation and make every generate() return the bare 'u_'
+    for (const size of [0, -1, 1.5, 65537, 2 ** 31, 2 ** 32 + 5]) {
+      assert.throws(() => defineId('u', { size }), /Size must be an integer between 1 and 65536/)
+    }
+    assert.equal(defineId('u', { size: 65536 }).generate().length, 'u_'.length + 65536)
+  })
+
+  test('an explicit invalid alphabet throws instead of becoming urlAlphabet', () => {
+    assert.throws(() => defineId('u', { alphabet: '' }), /Alphabet cannot be empty/)
+    assert.throws(() => defineId('u', { alphabet: 12345 }), /Alphabet must be a string/)
   })
 })
 
